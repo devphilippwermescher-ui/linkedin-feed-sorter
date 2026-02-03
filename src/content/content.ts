@@ -7,7 +7,11 @@ let overlayElement: HTMLDivElement | null = null;
 
 const SCROLL_DELAY = 2000;
 const MAX_NO_CHANGE = 3;
+const MAX_NO_NEW_POSTS = 5;  // Stop after this many scroll attempts with no new posts
 const CHECK_INTERVAL = 1000;
+
+let lastPostCount = 0;
+let noNewPostsCount = 0;
 
 console.log('[LinkedIn Analyzer] Content script loaded');
 
@@ -16,7 +20,9 @@ function initializeAfterLoad() {
   
   chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
     console.log('[LinkedIn Analyzer] Initial state:', response);
-    if (response?.isCollecting && response.targetCount > 0) {
+    // targetCount can be a number > 0 or 'all' for profile pages
+    const hasValidTarget = response?.targetCount === 'all' || (response?.targetCount > 0);
+    if (response?.isCollecting && hasValidTarget) {
       console.log('[LinkedIn Analyzer] Active collection found, resuming...');
       showOverlay(response.currentCount, response.targetCount);
       setTimeout(() => {
@@ -41,6 +47,7 @@ window.addEventListener("message", (event) => {
         type: "LINKEDIN_FEED_DATA",
         data: event.data.data,
         url: event.data.url,
+        feedType: event.data.feedType,
         timestamp: event.data.timestamp,
       })
       .then(() => {
@@ -69,7 +76,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-function showOverlay(currentCount: number = 0, targetCount: number = 0) {
+function showOverlay(currentCount: number = 0, targetCount: number | 'all' = 0) {
   console.log('[LinkedIn Analyzer] Showing overlay');
   
   if (overlayElement) {
@@ -103,6 +110,9 @@ function showOverlay(currentCount: number = 0, targetCount: number = 0) {
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   `;
   
+  const countText = targetCount === 'all' ? `${currentCount} Posts` : `${currentCount} / ${targetCount} Posts`;
+  const subText = targetCount === 'all' ? 'collecting all posts...' : 'collecting data...';
+  
   card.innerHTML = `
     <div style="
       width: 50px;
@@ -118,12 +128,12 @@ function showOverlay(currentCount: number = 0, targetCount: number = 0) {
       font-weight: 700;
       color: #034C9D;
       margin-bottom: 8px;
-    ">${currentCount} / ${targetCount} Posts</div>
+    ">${countText}</div>
     <div style="
       font-size: 16px;
       color: #6b7280;
       margin-bottom: 4px;
-    ">collecting data...</div>
+    ">${subText}</div>
     <div style="
       font-size: 14px;
       color: #9ca3af;
@@ -144,10 +154,14 @@ function showOverlay(currentCount: number = 0, targetCount: number = 0) {
   console.log('[LinkedIn Analyzer] Overlay created and added to body');
 }
 
-function updateOverlayText(currentCount: number, targetCount: number) {
+function updateOverlayText(currentCount: number, targetCount: number | 'all') {
   const countEl = document.getElementById('la-overlay-count');
   if (countEl) {
-    countEl.textContent = `${currentCount} / ${targetCount} Posts`;
+    if (targetCount === 'all') {
+      countEl.textContent = `${currentCount} Posts`;
+    } else {
+      countEl.textContent = `${currentCount} / ${targetCount} Posts`;
+    }
   }
 }
 
@@ -177,6 +191,8 @@ function startAutoScroll() {
   isAutoScrolling = true;
   lastScrollHeight = 0;
   noChangeCount = 0;
+  noNewPostsCount = 0;
+  lastPostCount = 0;
   
   console.log('[LinkedIn Analyzer] *** Starting auto-scroll ***');
   
@@ -257,11 +273,30 @@ function clickLoadMoreButton(): boolean {
 function checkIfComplete() {
   chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
     if (response) {
-      console.log('[LinkedIn Analyzer] State:', response.currentCount, '/', response.targetCount, 'isCollecting:', response.isCollecting);
+      console.log('[LinkedIn Analyzer] State:', response.currentCount, '/', response.targetCount, 'isCollecting:', response.isCollecting, 'collectAll:', response.collectAll);
       
       if (!response.isCollecting) {
         console.log('[LinkedIn Analyzer] Collection complete');
         stopAutoScroll();
+        return;
+      }
+      
+      // For "collect all" mode, check if we've stopped getting new posts
+      if (response.collectAll || response.targetCount === 'all') {
+        if (response.currentCount === lastPostCount) {
+          noNewPostsCount++;
+          console.log('[LinkedIn Analyzer] No new posts, attempt:', noNewPostsCount);
+          
+          if (noNewPostsCount >= MAX_NO_NEW_POSTS) {
+            console.log('[LinkedIn Analyzer] All posts collected (no new content)');
+            // Stop the collection
+            chrome.runtime.sendMessage({ type: "STOP_COLLECTION" });
+            stopAutoScroll();
+          }
+        } else {
+          noNewPostsCount = 0;
+          lastPostCount = response.currentCount;
+        }
       }
     }
   });

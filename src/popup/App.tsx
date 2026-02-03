@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { LinkedInPost, SortOption } from "types/linkedin";
+import { LinkedInPost, SortOption, PageType } from "types/linkedin";
 import PostList from "./components/PostList";
 import { 
   HiOutlineHandThumbUp, 
@@ -17,8 +17,9 @@ interface StoredPosts {
 
 interface CollectionStatus {
   isCollecting: boolean;
-  targetCount: number;
+  targetCount: number | 'all';
   currentCount: number;
+  collectAll?: boolean;
 }
 
 const MAX_POSTS = 2000;
@@ -26,10 +27,10 @@ const PRESET_COUNTS = [25, 50, 100, 200, 500];
 
 const App: React.FC = () => {
   const [posts, setPosts] = useState<LinkedInPost[]>([]);
-  const [postCount, setPostCount] = useState<number>(25);
+  const [postCount, setPostCount] = useState<number | 'all'>(25);
   const [customInput, setCustomInput] = useState<string>("25");
   const [selectedFilter, setSelectedFilter] = useState<SortOption>("likes");
-  const [isOnFeed, setIsOnFeed] = useState<boolean | null>(null);
+  const [pageType, setPageType] = useState<PageType | null>(null);
   const [collectionStatus, setCollectionStatus] = useState<CollectionStatus>({
     isCollecting: false,
     targetCount: 0,
@@ -44,12 +45,12 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (isOnFeed === false) {
+    if (pageType === 'other') {
       document.body.classList.add("landing-mode");
     } else {
       document.body.classList.remove("landing-mode");
     }
-  }, [isOnFeed]);
+  }, [pageType]);
 
   useEffect(() => {
     if (collectionStatus.isCollecting) {
@@ -61,8 +62,14 @@ const App: React.FC = () => {
   const checkCurrentTab = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const currentUrl = tabs[0]?.url || "";
-      const onFeed = currentUrl.includes("linkedin.com/feed");
-      setIsOnFeed(onFeed);
+      
+      if (currentUrl.includes("linkedin.com/feed")) {
+        setPageType('main-feed');
+      } else if (currentUrl.match(/linkedin\.com\/in\/[^/]+\/recent-activity/)) {
+        setPageType('profile-feed');
+      } else {
+        setPageType('other');
+      }
     });
   };
 
@@ -108,9 +115,13 @@ const App: React.FC = () => {
     );
   }, []);
 
-  const handlePresetClick = (count: number) => {
+  const handlePresetClick = (count: number | 'all') => {
     setPostCount(count);
-    setCustomInput(count.toString());
+    if (count === 'all') {
+      setCustomInput('');
+    } else {
+      setCustomInput(count.toString());
+    }
   };
 
   const handleCustomInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,6 +135,9 @@ const App: React.FC = () => {
   };
 
   const handleCustomInputBlur = () => {
+    // Don't process if we're in 'all' mode
+    if (postCount === 'all') return;
+    
     const numValue = parseInt(customInput, 10);
     if (isNaN(numValue) || numValue < 1) {
       setPostCount(25);
@@ -147,6 +161,7 @@ const App: React.FC = () => {
       isCollecting: true,
       targetCount,
       currentCount: 0,
+      collectAll: targetCount === 'all',
     });
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -156,6 +171,7 @@ const App: React.FC = () => {
         chrome.runtime.sendMessage({
           type: "START_COLLECTION",
           targetCount,
+          pageType: pageType,
           tabId,
         }, () => {
           chrome.tabs.reload(tabId);
@@ -216,6 +232,10 @@ const App: React.FC = () => {
         sorted = postsCopy;
     }
 
+    // If 'all' is selected, return all posts, otherwise slice to postCount
+    if (postCount === 'all') {
+      return sorted;
+    }
     return sorted.slice(0, postCount);
   }, [posts, selectedFilter, postCount]);
 
@@ -241,7 +261,7 @@ const App: React.FC = () => {
     }
   };
 
-  if (isOnFeed === null) {
+  if (pageType === null) {
     return (
       <div className="app">
         <div className="loading">Loading...</div>
@@ -249,7 +269,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (!isOnFeed) {
+  if (pageType === 'other') {
     return (
       <div className="app landing">
         <div className="landing-content">
@@ -331,6 +351,14 @@ const App: React.FC = () => {
                   {count}
                 </button>
               ))}
+              {pageType === 'profile-feed' && (
+                <button
+                  className={`preset-button all-posts ${postCount === 'all' ? 'active' : ''}`}
+                  onClick={() => handlePresetClick('all')}
+                >
+                  All
+                </button>
+              )}
             </div>
             
             <div className="custom-input-wrapper">
@@ -343,6 +371,8 @@ const App: React.FC = () => {
                 onBlur={handleCustomInputBlur}
                 min={1}
                 max={MAX_POSTS}
+                placeholder={postCount === 'all' ? 'All' : ''}
+                disabled={postCount === 'all'}
               />
               <span className="max-hint">Max: {MAX_POSTS}</span>
             </div>
@@ -369,16 +399,26 @@ const App: React.FC = () => {
           <div className="collection-progress">
             <div className="progress-info">
               <span className="progress-text">
-                Collecting posts... {collectionStatus.currentCount} / {collectionStatus.targetCount}
+                {collectionStatus.targetCount === 'all' 
+                  ? `Collecting all posts... ${collectionStatus.currentCount} found`
+                  : `Collecting posts... ${collectionStatus.currentCount} / ${collectionStatus.targetCount}`
+                }
               </span>
-              <div className="progress-bar">
-                <div 
-                  className="progress-fill"
-                  style={{ 
-                    width: `${(collectionStatus.currentCount / collectionStatus.targetCount) * 100}%`
-                  }}
-                />
-              </div>
+              {collectionStatus.targetCount !== 'all' && (
+                <div className="progress-bar">
+                  <div 
+                    className="progress-fill"
+                    style={{ 
+                      width: `${(collectionStatus.currentCount / (collectionStatus.targetCount as number)) * 100}%`
+                    }}
+                  />
+                </div>
+              )}
+              {collectionStatus.targetCount === 'all' && (
+                <div className="progress-bar infinite">
+                  <div className="progress-fill-infinite" />
+                </div>
+              )}
             </div>
             <button className="stop-button" onClick={handleStopCollection}>
               STOP & VIEW RESULTS

@@ -17,11 +17,30 @@
   function isFeedRequest(url: string | null | undefined): boolean {
     if (!url || typeof url !== "string") return false;
     const hasGraphQL = url.includes("voyager/api/graphql");
-    const hasFeedQuery =
+    const hasMainFeed =
       url.includes("feedDashMainFeed") ||
-      url.includes("queryId=voyagerFeedDashMainFeed");
-    const hasMainFeed = url.includes("MainFeed");
-    return hasGraphQL && (hasFeedQuery || hasMainFeed);
+      url.includes("queryId=voyagerFeedDashMainFeed") ||
+      url.includes("MainFeed");
+    const hasProfileFeed =
+      url.includes("feedDashProfileUpdates") ||
+      url.includes("voyagerFeedDashProfileUpdates") ||
+      url.includes("ProfileUpdates");
+    return hasGraphQL && (hasMainFeed || hasProfileFeed);
+  }
+
+  function getRequestType(url: string | null | undefined): 'main' | 'profile' | null {
+    if (!url || typeof url !== "string") return null;
+    if (url.includes("feedDashProfileUpdates") || 
+        url.includes("voyagerFeedDashProfileUpdates") ||
+        url.includes("ProfileUpdates")) {
+      return 'profile';
+    }
+    if (url.includes("feedDashMainFeed") || 
+        url.includes("voyagerFeedDashMainFeed") ||
+        url.includes("MainFeed")) {
+      return 'main';
+    }
+    return null;
   }
 
   const originalFetch = window.fetch.bind(window);
@@ -39,7 +58,8 @@
         : (input as Request)?.url;
 
     if (isFeedRequest(url)) {
-      console.log('[LinkedIn Analyzer] Feed request intercepted (fetch):', url?.substring(0, 100));
+      const requestType = getRequestType(url);
+      console.log('[LinkedIn Analyzer] Feed request intercepted (fetch):', requestType, url?.substring(0, 100));
       try {
         const response = await originalFetch(input, init);
         const clonedResponse = response.clone();
@@ -50,12 +70,14 @@
             console.log('[LinkedIn Analyzer] Feed data received:', {
               hasData: !!data?.data,
               includedCount: data?.included?.length || 0,
+              requestType,
             });
             window.postMessage(
               {
                 type: "LINKEDIN_FEED_DATA_FROM_PAGE",
                 data: data,
                 url: url,
+                feedType: requestType,
                 timestamp: Date.now(),
               },
               "*"
@@ -105,7 +127,8 @@
     const url = (this as any)._linkedinUrl;
 
     if (isFeedRequest(url)) {
-      console.log('[LinkedIn Analyzer] Feed request intercepted (XHR):', url?.substring(0, 100));
+      const requestType = getRequestType(url);
+      console.log('[LinkedIn Analyzer] Feed request intercepted (XHR):', requestType, url?.substring(0, 100));
       this.addEventListener("load", async function () {
         try {
           let data: any;
@@ -125,6 +148,7 @@
           console.log('[LinkedIn Analyzer] XHR data received:', {
             hasData: !!data?.data,
             includedCount: data?.included?.length || 0,
+            requestType,
           });
 
           window.postMessage(
@@ -132,6 +156,7 @@
               type: "LINKEDIN_FEED_DATA_FROM_PAGE",
               data: data,
               url: url,
+              feedType: requestType,
               timestamp: Date.now(),
             },
             "*"

@@ -13,6 +13,8 @@ body {
   font-family: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  width: 420px;
 }
 
 body.landing-mode {
@@ -29,7 +31,7 @@ body.landing-mode {
 
 .app.setup-view {
   height: auto;
-  min-height: 480px;
+  overflow: hidden;
 }
 
 .app.results-view {
@@ -83,19 +85,19 @@ body.landing-mode {
 /* Setup Content */
 .setup-content {
   flex: 1;
-  padding: 16px 16px;
+  padding: 14px 16px;
   background: #CDDBEB;
 }
 
 .setup-section {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .section-title {
   font-size: 13px;
   font-weight: 600;
   color: #1a1a1a;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 /* Count Selector */
@@ -133,6 +135,23 @@ body.landing-mode {
 
 .preset-button.active {
   background: #034C9D;
+  color: white;
+  border-color: #034C9D;
+}
+
+.preset-button.all-posts {
+  background: #f0f7ff;
+  color: #034C9D;
+  border: 1px solid #034C9D;
+}
+
+.preset-button.all-posts:hover {
+  background: #034C9D;
+  color: white;
+}
+
+.preset-button.all-posts.active {
+  background: linear-gradient(135deg, #034C9D 0%, #023b7a 100%);
   color: white;
   border-color: #034C9D;
 }
@@ -177,6 +196,12 @@ body.landing-mode {
   border-color: #034C9D;
 }
 
+.custom-input:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
 .max-hint {
   font-size: 10px;
   color: #9ca3af;
@@ -191,14 +216,14 @@ body.landing-mode {
 .filter-buttons {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .filter-button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -262,26 +287,26 @@ body.landing-mode {
 .collection-progress {
   background: white;
   border-radius: 10px;
-  padding: 14px;
+  padding: 10px 14px;
   border: 2px solid #034C9D;
 }
 
 .progress-info {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .progress-text {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #034C9D;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .progress-bar {
-  height: 8px;
+  height: 6px;
   background: #CDDBEB;
-  border-radius: 4px;
+  border-radius: 3px;
   overflow: hidden;
 }
 
@@ -298,14 +323,34 @@ body.landing-mode {
   50% { opacity: 0.7; }
 }
 
+.progress-bar.infinite {
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-fill-infinite {
+  position: absolute;
+  top: 0;
+  left: -100%;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, #034C9D 50%, transparent);
+  animation: infinite-progress 1.5s ease-in-out infinite;
+}
+
+@keyframes infinite-progress {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
 .stop-button {
   width: 100%;
-  padding: 10px 20px;
+  padding: 8px 20px;
   background: #ef4444;
   border: none;
   border-radius: 8px;
   font-family: "Poppins", sans-serif;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: white;
   text-transform: uppercase;
@@ -340,14 +385,16 @@ body.landing-mode {
 
 /* Footer */
 .app-footer {
-  padding: 12px 16px;
+  padding: 10px 16px;
   background: #f0f0f0;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .app-footer p {
   font-size: 11px;
   color: #6b7280;
+  margin: 0;
 }
 
 /* Results View */

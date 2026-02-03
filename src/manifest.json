@@ -9,7 +9,8 @@
     {
       "matches": [
         "https://www.linkedin.com/feed*",
-        "https://www.linkedin.com/feed/*"
+        "https://www.linkedin.com/feed/*",
+        "https://www.linkedin.com/in/*/recent-activity/*"
       ],
       "js": ["interceptor.js"],
       "run_at": "document_start",
@@ -18,7 +19,8 @@
     {
       "matches": [
         "https://www.linkedin.com/feed*",
-        "https://www.linkedin.com/feed/*"
+        "https://www.linkedin.com/feed/*",
+        "https://www.linkedin.com/in/*/recent-activity/*"
       ],
       "js": ["content.js"],
       "run_at": "document_start"

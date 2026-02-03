@@ -33,10 +33,32 @@ export interface LinkedInAPIResponse {
           total: number;
         };
       };
+      feedDashProfileUpdatesByMemberShareFeed?: {
+        '*elements'?: string[];
+        elements?: any[];
+        paging?: {
+          count: number;
+          start: number;
+          total: number;
+        };
+        metadata?: {
+          paginationToken?: string;
+          paginationTokenExpiryTime?: number | null;
+        };
+      };
     };
   };
   included?: any[];
+  feedType?: 'main' | 'profile';
 }
 
 export type SortOption = 'likes' | 'comments' | 'shares' | 'engagement' | 'default';
+
+export type PageType = 'main-feed' | 'profile-feed' | 'other';
+
+export interface CollectionConfig {
+  pageType: PageType;
+  targetCount: number | 'all';
+  tabId?: number;
+}
 

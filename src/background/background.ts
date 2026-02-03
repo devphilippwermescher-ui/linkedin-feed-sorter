@@ -1,11 +1,11 @@
-import { LinkedInAPIResponse } from "types/linkedin";
+import { LinkedInAPIResponse, PageType } from "types/linkedin";
 import { parseLinkedInResponse } from "utils/parser";
 
 console.log('[LinkedIn Analyzer] Background script loaded');
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "LINKEDIN_FEED_DATA") {
-    handleFeedData(message.data as LinkedInAPIResponse);
+    handleFeedData(message.data as LinkedInAPIResponse, message.feedType);
     sendResponse({ success: true });
     return true;
   }
@@ -26,15 +26,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "START_COLLECTION") {
+    const pageType: PageType = message.pageType || 'main-feed';
+    const targetCount = message.targetCount === 'all' ? Infinity : message.targetCount;
+    
     chrome.storage.local.set({ 
       linkedinPosts: { posts: [], lastUpdate: 0 },
       collectionState: {
         isCollecting: true,
-        targetCount: message.targetCount,
+        targetCount: targetCount,
+        collectAll: message.targetCount === 'all',
+        pageType: pageType,
         tabId: message.tabId,
       }
     }, () => {
-      console.log('[LinkedIn Analyzer] Collection started, target:', message.targetCount);
+      console.log('[LinkedIn Analyzer] Collection started, target:', targetCount, 'pageType:', pageType);
       sendResponse({ success: true });
     });
     return true;
@@ -55,16 +60,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_COLLECTION_STATE") {
     chrome.storage.local.get(["linkedinPosts", "collectionState"], (result) => {
       const posts = result.linkedinPosts?.posts || [];
-      const state = result.collectionState || { isCollecting: false, targetCount: 0 };
+      const state = result.collectionState || { isCollecting: false, targetCount: 0, collectAll: false, pageType: 'main-feed' };
       console.log('[LinkedIn Analyzer] GET_COLLECTION_STATE:', { 
         isCollecting: state.isCollecting, 
         targetCount: state.targetCount, 
-        currentCount: posts.length 
+        currentCount: posts.length,
+        collectAll: state.collectAll,
+        pageType: state.pageType,
       });
       sendResponse({
         isCollecting: state.isCollecting,
-        targetCount: state.targetCount,
+        targetCount: state.collectAll ? 'all' : state.targetCount,
         currentCount: posts.length,
+        collectAll: state.collectAll,
+        pageType: state.pageType,
       });
     });
     return true;
@@ -73,19 +82,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-async function handleFeedData(response: LinkedInAPIResponse) {
+async function handleFeedData(response: LinkedInAPIResponse, feedType?: 'main' | 'profile') {
   try {
-    const elements = response.data?.data?.feedDashMainFeedByMainFeed?.['*elements'] || [];
+    const mainFeedElements = response.data?.data?.feedDashMainFeedByMainFeed?.['*elements'] || [];
+    const profileFeedData = response.data?.data?.feedDashProfileUpdatesByMemberShareFeed;
+    let profileFeedElements: any[] = [];
+    
+    if (profileFeedData) {
+      profileFeedElements = profileFeedData['*elements'] || [];
+      if (profileFeedElements.length === 0 && profileFeedData.elements) {
+        profileFeedElements = profileFeedData.elements.map((el: any) => el['*update'] || el.entityUrn || el.urn).filter(Boolean);
+      }
+    }
+    
+    const elements = mainFeedElements.length > 0 ? mainFeedElements : profileFeedElements;
     const included = response.included || [];
     
     console.log('[LinkedIn Analyzer] Processing feed data:', {
+      feedType,
       elementsCount: elements.length,
       includedCount: included.length,
       socialActivityCount: included.filter((i: any) => i.$type === 'com.linkedin.voyager.dash.feed.SocialActivityCounts').length,
       updateCount: included.filter((i: any) => i.$type?.includes('Update')).length,
     });
     
-    const parsedPosts = parseLinkedInResponse(response);
+    const parsedPosts = parseLinkedInResponse(response, feedType);
     
     if (parsedPosts.length === 0) {
       console.log('[LinkedIn Analyzer] No posts parsed from response');
@@ -107,7 +128,7 @@ async function handleFeedData(response: LinkedInAPIResponse) {
 
     const result = await chrome.storage.local.get(["linkedinPosts", "collectionState"]);
     const existingData = result.linkedinPosts || { posts: [], lastUpdate: 0 };
-    const collectionState = result.collectionState || { isCollecting: false, targetCount: 0 };
+    const collectionState = result.collectionState || { isCollecting: false, targetCount: 0, collectAll: false };
     
     const existingUrns = new Set(existingData.posts.map((p: any) => p.activityUrn));
     const newPosts = parsedPosts.filter((p) => !existingUrns.has(p.activityUrn));
@@ -117,9 +138,12 @@ async function handleFeedData(response: LinkedInAPIResponse) {
 
     await chrome.storage.local.set({ linkedinPosts: existingData });
 
-    console.log('[LinkedIn Analyzer] Posts collected:', existingData.posts.length, '/', collectionState.targetCount);
+    const targetDisplay = collectionState.collectAll ? 'all' : collectionState.targetCount;
+    console.log('[LinkedIn Analyzer] Posts collected:', existingData.posts.length, '/', targetDisplay);
 
+    // Only stop if we have a target count (not collecting all) and we've reached it
     if (collectionState.isCollecting && 
+        !collectionState.collectAll &&
         collectionState.targetCount > 0 && 
         existingData.posts.length >= collectionState.targetCount) {
       

@@ -1,14 +1,32 @@
 import { LinkedInPost, LinkedInAPIResponse, SocialActivityCounts } from 'types/linkedin';
 
-export function parseLinkedInResponse(response: LinkedInAPIResponse): LinkedInPost[] {
+export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 'main' | 'profile'): LinkedInPost[] {
   const posts: LinkedInPost[] = [];
   
-  if (!response.data?.data?.feedDashMainFeedByMainFeed) {
+  let elements: any[] = [];
+  const included = response.included || [];
+  
+  // Check for main feed
+  if (response.data?.data?.feedDashMainFeedByMainFeed) {
+    elements = response.data.data.feedDashMainFeedByMainFeed['*elements'] || [];
+    console.log('[Parser] Parsing main feed, elements:', elements.length);
+  }
+  // Check for profile feed
+  else if (response.data?.data?.feedDashProfileUpdatesByMemberShareFeed) {
+    const profileFeed = response.data.data.feedDashProfileUpdatesByMemberShareFeed;
+    elements = profileFeed['*elements'] || [];
+    
+    // Profile feed may also have elements as direct objects with *update references
+    if (elements.length === 0 && profileFeed.elements) {
+      elements = profileFeed.elements.map((el: any) => el['*update'] || el.entityUrn || el.urn).filter(Boolean);
+    }
+    console.log('[Parser] Parsing profile feed, elements:', elements.length);
+  }
+  
+  if (elements.length === 0) {
+    console.log('[Parser] No elements found in response');
     return posts;
   }
-
-  const elements = response.data.data.feedDashMainFeedByMainFeed['*elements'] || [];
-  const included = response.included || [];
 
   const socialActivityByActivity = new Map<string, SocialActivityCounts>();
   const socialActivityByUgcPost = new Map<string, SocialActivityCounts>();
