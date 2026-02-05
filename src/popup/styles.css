@@ -17,6 +17,7 @@ body {
   width: 420px;
 }
 
+html.landing-mode,
 body.landing-mode {
   width: 300px !important;
   height: auto !important;

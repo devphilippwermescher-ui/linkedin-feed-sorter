@@ -6,21 +6,204 @@ let noChangeCount = 0;
 let overlayElement: HTMLDivElement | null = null;
 
 const SCROLL_DELAY = 2000;
-const MAX_NO_CHANGE = 3;
-const MAX_NO_NEW_POSTS = 5;  // Stop after this many scroll attempts with no new posts
+const MAX_NO_CHANGE = 2;
+const MAX_NO_NEW_POSTS = 5;
+const MAX_BUTTON_ATTEMPTS = 3;
 const CHECK_INTERVAL = 1000;
 
 let lastPostCount = 0;
 let noNewPostsCount = 0;
+let buttonAttempts = 0;
 
 console.log('[LinkedIn Analyzer] Content script loaded');
+
+function parsePostElement(postEl: Element): any | null {
+  try {
+    const activityUrn = postEl.getAttribute('data-urn') || postEl.getAttribute('data-id') || '';
+    if (!activityUrn) return null;
+    
+    const activityMatch = activityUrn.match(/activity:(\d+)/);
+    if (!activityMatch) return null;
+    
+    let authorName = 'Unknown';
+    const authorEl = postEl.querySelector('.update-components-actor__title span[dir="ltr"] span[aria-hidden="true"]');
+    if (authorEl) {
+      authorName = authorEl.textContent?.trim() || 'Unknown';
+    }
+    
+    let text = '';
+    const textEl = postEl.querySelector('.update-components-text span[dir="ltr"]');
+    if (textEl) {
+      text = textEl.textContent?.trim() || '';
+    }
+    
+    const parseNumberWithSpaces = (text: string): number => {
+      const cleaned = text.replace(/[\s\u00A0\u202F]+/g, '');
+      const num = parseInt(cleaned, 10);
+      return isNaN(num) ? 0 : num;
+    };
+    
+    let numLikes = 0;
+    const reactionsBtn = postEl.querySelector('[data-reaction-details]');
+    if (reactionsBtn) {
+      const ariaLabel = reactionsBtn.getAttribute('aria-label') || '';
+      const match = ariaLabel.match(/([\d\s\u00A0]+)/);
+      if (match) {
+        numLikes = parseNumberWithSpaces(match[1]);
+      }
+    }
+    
+    if (numLikes === 0) {
+      const likesCountEl = postEl.querySelector('.social-details-social-counts__reactions-count');
+      if (likesCountEl) {
+        const likesText = likesCountEl.textContent?.trim() || '';
+        numLikes = parseNumberWithSpaces(likesText);
+      }
+    }
+    
+    if (numLikes === 0) {
+      const socialCountsContainer = postEl.querySelector('.social-details-social-counts__reactions');
+      if (socialCountsContainer) {
+        const fullText = socialCountsContainer.textContent || '';
+        const moreMatch = fullText.match(/(?:и еще|and)\s*([\d\s\u00A0]+)/i);
+        if (moreMatch) {
+          const additionalCount = parseNumberWithSpaces(moreMatch[1]);
+          if (additionalCount > 0) {
+            numLikes = 1 + additionalCount;
+          }
+        }
+      }
+    }
+    
+    let numComments = 0;
+    const commentsLink = postEl.querySelector('.social-details-social-counts__comments button');
+    if (commentsLink) {
+      const ariaLabel = commentsLink.getAttribute('aria-label') || '';
+      const match = ariaLabel.match(/([\d\s\u00A0]+)/);
+      if (match) {
+        numComments = parseNumberWithSpaces(match[1]);
+      }
+      
+      if (numComments === 0) {
+        const text = commentsLink.textContent?.trim() || '';
+        numComments = parseNumberWithSpaces(text);
+      }
+    }
+    
+    if (numComments === 0) {
+      const commentBtn = postEl.querySelector('button[aria-label*="комментар"], button[aria-label*="comment"]');
+      if (commentBtn) {
+        const ariaLabel = commentBtn.getAttribute('aria-label') || '';
+        const match = ariaLabel.match(/([\d\s\u00A0]+)/);
+        if (match) {
+          numComments = parseNumberWithSpaces(match[1]);
+        }
+      }
+    }
+    
+    let numShares = 0;
+    const allButtons = postEl.querySelectorAll('.social-details-social-counts button');
+    for (const btn of allButtons) {
+      const ariaLabel = btn.getAttribute('aria-label') || '';
+      const btnText = btn.textContent?.toLowerCase() || '';
+      
+      const isRepostButton = 
+        ariaLabel.includes('репост') || 
+        ariaLabel.includes('repost') ||
+        btnText.includes('репост') ||
+        btnText.includes('repost');
+      
+      if (isRepostButton) {
+        const match = ariaLabel.match(/([\d\s\u00A0]+)/);
+        if (match) {
+          numShares = parseNumberWithSpaces(match[1]);
+        }
+        
+        if (numShares === 0) {
+          const textMatch = btnText.match(/([\d\s\u00A0]+)/);
+          if (textMatch) {
+            numShares = parseNumberWithSpaces(textMatch[1]);
+          }
+        }
+        break;
+      }
+    }
+    
+    const isSponsored = activityUrn.includes('sponsored') || 
+      !!postEl.querySelector('[data-ad-banner]') ||
+      postEl.textContent?.toLowerCase().includes('promoted') ||
+      postEl.textContent?.toLowerCase().includes('реклама');
+    
+    return {
+      activityUrn: `urn:li:activity:${activityMatch[1]}`,
+      authorName,
+      authorUrn: '',
+      text,
+      numLikes,
+      numComments,
+      numShares,
+      isSponsored,
+    };
+  } catch (e) {
+    console.log('[LinkedIn Analyzer] Error parsing DOM post:', e);
+    return null;
+  }
+}
+
+function parsePostsFromDOM(): void {
+  console.log('[LinkedIn Analyzer] Parsing posts from DOM...');
+  
+  const postElements = document.querySelectorAll('[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"]');
+  const posts: any[] = [];
+  
+  postElements.forEach((postEl) => {
+    const post = parsePostElement(postEl);
+    if (post) {
+      console.log('[LinkedIn Analyzer] DOM post:', post.authorName, 'likes:', post.numLikes, 'comments:', post.numComments);
+      posts.push(post);
+    }
+  });
+  
+  if (posts.length > 0) {
+    console.log('[LinkedIn Analyzer] Sending', posts.length, 'DOM posts to background');
+    chrome.runtime.sendMessage({
+      type: "DOM_POSTS",
+      posts: posts,
+    });
+  }
+}
+
+function syncPostsWithDOM(): void {
+  const postElements = document.querySelectorAll('[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"]');
+  const domUpdates: any[] = [];
+  
+  postElements.forEach((postEl) => {
+    const post = parsePostElement(postEl);
+    if (post && (post.numLikes > 0 || post.numComments > 0 || post.numShares > 0)) {
+      domUpdates.push({
+        activityUrn: post.activityUrn,
+        numLikes: post.numLikes,
+        numComments: post.numComments,
+        numShares: post.numShares,
+        authorName: post.authorName,
+      });
+    }
+  });
+  
+  if (domUpdates.length > 0) {
+    console.log('[LinkedIn Analyzer] Syncing', domUpdates.length, 'posts with DOM metrics');
+    chrome.runtime.sendMessage({
+      type: "SYNC_DOM_METRICS",
+      updates: domUpdates,
+    });
+  }
+}
 
 function initializeAfterLoad() {
   console.log('[LinkedIn Analyzer] Page ready, checking collection state...');
   
   chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
     console.log('[LinkedIn Analyzer] Initial state:', response);
-    // targetCount can be a number > 0 or 'all' for profile pages
     const hasValidTarget = response?.targetCount === 'all' || (response?.targetCount > 0);
     if (response?.isCollecting && hasValidTarget) {
       console.log('[LinkedIn Analyzer] Active collection found, resuming...');
@@ -193,8 +376,11 @@ function startAutoScroll() {
   noChangeCount = 0;
   noNewPostsCount = 0;
   lastPostCount = 0;
+  buttonAttempts = 0;
   
   console.log('[LinkedIn Analyzer] *** Starting auto-scroll ***');
+  
+  parsePostsFromDOM();
   
   chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
     if (response) {
@@ -209,6 +395,7 @@ function startAutoScroll() {
     }
     updateOverlayCount();
     checkIfComplete();
+    syncPostsWithDOM();
   }, CHECK_INTERVAL);
   
   doScroll();
@@ -231,13 +418,10 @@ function doScroll() {
   
   if (currentScrollHeight === lastScrollHeight) {
     noChangeCount++;
-    console.log('[LinkedIn Analyzer] No new content, attempt:', noChangeCount);
+    console.log('[LinkedIn Analyzer] No scroll change, attempt:', noChangeCount);
     
     if (noChangeCount >= MAX_NO_CHANGE) {
-      const clicked = clickLoadMoreButton();
-      if (clicked) {
-        noChangeCount = 0;
-      }
+      tryClickLoadMoreButton();
     }
   } else {
     noChangeCount = 0;
@@ -249,31 +433,56 @@ function doScroll() {
   }, SCROLL_DELAY);
 }
 
+function tryClickLoadMoreButton() {
+  const clicked = clickLoadMoreButton();
+  if (clicked) {
+    console.log('[LinkedIn Analyzer] Button clicked, resetting counters');
+    noChangeCount = 0;
+    buttonAttempts++;
+    
+    if (buttonAttempts >= MAX_BUTTON_ATTEMPTS) {
+      console.log('[LinkedIn Analyzer] Button attempts exhausted');
+    }
+  } else {
+    console.log('[LinkedIn Analyzer] No button found to click');
+  }
+}
+
 function clickLoadMoreButton(): boolean {
   const buttons = document.querySelectorAll('button');
   
-  for (const button of buttons) {
-    const text = button.textContent?.toLowerCase() || '';
-    if (text.includes('показать') || 
-        text.includes('show') || 
-        text.includes('load') || 
-        text.includes('more') ||
-        text.includes('ещё') ||
-        text.includes('еще') ||
-        text.includes('результат')) {
-      console.log('[LinkedIn Analyzer] Clicking button:', text.trim().substring(0, 50));
-      button.click();
+  for (const btn of buttons) {
+    const text = btn.textContent?.toLowerCase() || '';
+    const isVisible = (btn as HTMLElement).offsetParent !== null;
+    
+    if (!isVisible) continue;
+    
+    const isRussianFeedButton = 
+      text.includes('показать') && 
+      text.includes('результат') && 
+      (text.includes('ленте') || text.includes('ленты') || text.includes('обновлен'));
+    
+    const isEnglishFeedButton = 
+      text.includes('show') && 
+      text.includes('more') && 
+      text.includes('result') && 
+      (text.includes('feed') || text.includes('update'));
+    
+    if (isRussianFeedButton || isEnglishFeedButton) {
+      console.log('[LinkedIn Analyzer] Found feed results button:', text.trim().substring(0, 100));
+      btn.click();
       return true;
     }
   }
   
+  console.log('[LinkedIn Analyzer] Feed results button not found');
   return false;
 }
 
 function checkIfComplete() {
   chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
     if (response) {
-      console.log('[LinkedIn Analyzer] State:', response.currentCount, '/', response.targetCount, 'isCollecting:', response.isCollecting, 'collectAll:', response.collectAll);
+      console.log('[LinkedIn Analyzer] State:', response.currentCount, '/', response.targetCount, 'isCollecting:', response.isCollecting);
       
       if (!response.isCollecting) {
         console.log('[LinkedIn Analyzer] Collection complete');
@@ -281,22 +490,26 @@ function checkIfComplete() {
         return;
       }
       
-      // For "collect all" mode, check if we've stopped getting new posts
-      if (response.collectAll || response.targetCount === 'all') {
-        if (response.currentCount === lastPostCount) {
-          noNewPostsCount++;
-          console.log('[LinkedIn Analyzer] No new posts, attempt:', noNewPostsCount);
-          
+      if (response.currentCount === lastPostCount) {
+        noNewPostsCount++;
+        console.log('[LinkedIn Analyzer] No new posts, attempt:', noNewPostsCount);
+        
+        if (noNewPostsCount >= 2 && noNewPostsCount < MAX_NO_NEW_POSTS) {
+          console.log('[LinkedIn Analyzer] Trying button due to no new posts');
+          tryClickLoadMoreButton();
+        }
+        
+        if (response.collectAll || response.targetCount === 'all') {
           if (noNewPostsCount >= MAX_NO_NEW_POSTS) {
-            console.log('[LinkedIn Analyzer] All posts collected (no new content)');
-            // Stop the collection
+            console.log('[LinkedIn Analyzer] All posts collected');
             chrome.runtime.sendMessage({ type: "STOP_COLLECTION" });
             stopAutoScroll();
           }
-        } else {
-          noNewPostsCount = 0;
-          lastPostCount = response.currentCount;
         }
+      } else {
+        noNewPostsCount = 0;
+        buttonAttempts = 0;
+        lastPostCount = response.currentCount;
       }
     }
   });

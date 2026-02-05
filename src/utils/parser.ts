@@ -6,17 +6,13 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
   let elements: any[] = [];
   const included = response.included || [];
   
-  // Check for main feed
   if (response.data?.data?.feedDashMainFeedByMainFeed) {
     elements = response.data.data.feedDashMainFeedByMainFeed['*elements'] || [];
     console.log('[Parser] Parsing main feed, elements:', elements.length);
-  }
-  // Check for profile feed
-  else if (response.data?.data?.feedDashProfileUpdatesByMemberShareFeed) {
+  } else if (response.data?.data?.feedDashProfileUpdatesByMemberShareFeed) {
     const profileFeed = response.data.data.feedDashProfileUpdatesByMemberShareFeed;
     elements = profileFeed['*elements'] || [];
     
-    // Profile feed may also have elements as direct objects with *update references
     if (elements.length === 0 && profileFeed.elements) {
       elements = profileFeed.elements.map((el: any) => el['*update'] || el.entityUrn || el.urn).filter(Boolean);
     }
@@ -33,6 +29,7 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
   const socialActivityByFullUrn = new Map<string, SocialActivityCounts>();
   const updateMap = new Map<string, any>();
   const profileMap = new Map<string, any>();
+  const socialDetailMap = new Map<string, any>();
 
   included.forEach((item: any) => {
     if (!item) return;
@@ -71,6 +68,27 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
           numShares: item.numShares || 0,
           urn: fullUrn,
         });
+      }
+    }
+    
+    if (item.$type === 'com.linkedin.voyager.dash.social.SocialDetail') {
+      const entityUrn = item.entityUrn || '';
+      if (entityUrn) {
+        socialDetailMap.set(entityUrn, item);
+        
+        const activityMatches = entityUrn.match(/activity:(\d+)/g) || [];
+        for (const match of activityMatches) {
+          const id = match.replace('activity:', '');
+          socialDetailMap.set(id, item);
+        }
+      }
+      
+      if (item['*totalSocialActivityCounts']) {
+        const countsRef = item['*totalSocialActivityCounts'];
+        const activityMatch = countsRef.match(/activity:(\d+)/);
+        if (activityMatch) {
+          socialDetailMap.set(`counts:${activityMatch[1]}`, countsRef);
+        }
       }
     }
 
@@ -120,6 +138,16 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
     }
   });
 
+  for (const [key, ref] of socialDetailMap.entries()) {
+    if (key.startsWith('counts:') && typeof ref === 'string') {
+      const activityId = key.replace('counts:', '');
+      const countsObj = socialActivityByFullUrn.get(ref);
+      if (countsObj && !socialActivityByActivity.has(activityId)) {
+        socialActivityByActivity.set(activityId, countsObj);
+      }
+    }
+  }
+
   elements.forEach((elementUrn: string) => {
     if (!elementUrn || typeof elementUrn !== 'string') return;
 
@@ -163,19 +191,26 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
       socialActivity = socialActivityByFullUrn.get(activityUrn);
     }
     
+    if (!socialActivity) {
+      const fsdCountsUrn = `urn:li:fsd_socialActivityCounts:urn:li:activity:${activityId}`;
+      socialActivity = socialActivityByFullUrn.get(fsdCountsUrn);
+    }
+    
     if (!socialActivity && update) {
-      const shareUrn = update.metadata?.shareUrn || '';
-      if (shareUrn) {
-        const ugcMatch = shareUrn.match(/ugcPost:(\d+)/);
-        if (ugcMatch) {
-          socialActivity = socialActivityByUgcPost.get(ugcMatch[1]);
+      const socialDetailRef = update['*socialDetail'] || '';
+      if (socialDetailRef) {
+        const threadMatch = socialDetailRef.match(/activity:(\d+)/);
+        if (threadMatch) {
+          const threadActivityId = threadMatch[1];
+          socialActivity = socialActivityByActivity.get(threadActivityId);
+          
+          if (!socialActivity) {
+            const fsdCountsUrn = `urn:li:fsd_socialActivityCounts:urn:li:activity:${threadActivityId}`;
+            socialActivity = socialActivityByFullUrn.get(fsdCountsUrn);
+          }
         }
-      }
-      
-      if (!socialActivity) {
-        const socialDetailRef = update['*socialDetail'] || update.socialDetail || '';
         
-        if (socialDetailRef) {
+        if (!socialActivity) {
           const ugcMatches = socialDetailRef.match(/ugcPost:(\d+)/g) || [];
           for (const match of ugcMatches) {
             const id = match.replace('ugcPost:', '');
@@ -185,25 +220,36 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
               break;
             }
           }
+        }
+      }
+      
+      if (!socialActivity) {
+        const shareUrn = update.metadata?.shareUrn || '';
+        if (shareUrn) {
+          const ugcMatch = shareUrn.match(/ugcPost:(\d+)/);
+          if (ugcMatch) {
+            socialActivity = socialActivityByUgcPost.get(ugcMatch[1]);
+          }
           
-          if (!socialActivity) {
-            const allActivityIds = socialDetailRef.match(/activity:(\d+)/g) || [];
-            for (const match of allActivityIds) {
-              const id = match.replace('activity:', '');
-              const found = socialActivityByActivity.get(id);
-              if (found) {
-                socialActivity = found;
-                break;
-              }
-              
-              const fullUrn = `urn:li:activity:${id}`;
-              const foundByUrn = socialActivityByFullUrn.get(fullUrn);
-              if (foundByUrn) {
-                socialActivity = foundByUrn;
+          const shareMatch = shareUrn.match(/share:(\d+)/);
+          if (!socialActivity && shareMatch) {
+            const shareId = shareMatch[1];
+            for (const [urn, counts] of socialActivityByFullUrn.entries()) {
+              if (urn.includes(shareId)) {
+                socialActivity = counts;
                 break;
               }
             }
           }
+        }
+      }
+    }
+    
+    if (!socialActivity) {
+      for (const [urn, counts] of socialActivityByFullUrn.entries()) {
+        if (urn.includes(activityId)) {
+          socialActivity = counts;
+          break;
         }
       }
     }
@@ -273,39 +319,13 @@ export function parseLinkedInResponse(response: LinkedInAPIResponse, feedType?: 
     const isSponsored = elementUrn.includes('sponsored');
 
     if (authorName === 'Unknown') {
-      console.log(`[Parser] Post ${activityId}: Author not found`, {
-        activityId,
-        activityUrn,
-        hasUpdate: !!update,
-        updateActor: update?.actor ? {
-          urn: update.actor.urn || update.actor.entityUrn || 'none',
-          name: update.actor.name || 'none',
-          firstName: update.actor.firstName || 'none',
-          lastName: update.actor.lastName || 'none',
-        } : 'none',
-        profileMapSize: profileMap.size,
-        updateMapSize: updateMap.size,
-      });
+      console.log(`[Parser] Post ${activityId}: Author not found`);
     }
 
     if (socialActivity && (numLikes > 0 || numComments > 0 || numShares > 0)) {
-      console.log(`[Parser] Post ${activityId}: Found social activity`, {
-        activityId,
-        activityUrn,
-        authorName,
-        numLikes,
-        numComments,
-        numShares,
-        socialActivityUrn: socialActivity.urn,
-      });
+      console.log(`[Parser] Post ${activityId}:`, authorName, `- likes: ${numLikes}, comments: ${numComments}, shares: ${numShares}`);
     } else if (!socialActivity) {
-      console.log(`[Parser] Post ${activityId}: No social activity found`, {
-        activityId,
-        activityUrn,
-        authorName,
-        hasUpdate: !!update,
-        socialDetailRef: update?.['*socialDetail'] || update?.socialDetail || 'none',
-      });
+      console.log(`[Parser] Post ${activityId}: No social activity found`);
     }
 
     posts.push({

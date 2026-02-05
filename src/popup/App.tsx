@@ -46,8 +46,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (pageType === 'other') {
+      document.documentElement.classList.add("landing-mode");
       document.body.classList.add("landing-mode");
     } else {
+      document.documentElement.classList.remove("landing-mode");
       document.body.classList.remove("landing-mode");
     }
   }, [pageType]);
