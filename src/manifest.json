@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Analyzer",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Analyze and sort LinkedIn feed posts by engagement metrics",
   "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": ["https://www.linkedin.com/*"],
