@@ -1,4 +1,4 @@
-import { LinkedInAPIResponse, LinkedInPost, PageType } from "types/linkedin";
+import { LinkedInAPIResponse, LinkedInPost, PageType, CollectionMode } from "types/linkedin";
 import { parseLinkedInResponse } from "utils/parser";
 
 console.log('[LinkedIn Analyzer] Background script loaded');
@@ -48,6 +48,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const requestedCount = message.targetCount === 'all' ? Infinity : message.targetCount;
     const BUFFER_SIZE = 11;
     const targetCount = requestedCount === Infinity ? Infinity : requestedCount + BUFFER_SIZE;
+    const collectionMode: CollectionMode = message.collectionMode || 'precision';
     
     chrome.storage.local.set({ 
       linkedinPosts: { posts: [], lastUpdate: 0 },
@@ -58,9 +59,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         collectAll: message.targetCount === 'all',
         pageType: pageType,
         tabId: message.tabId,
+        collectionMode: collectionMode,
       }
     }, () => {
-      console.log('[LinkedIn Analyzer] Collection started, requested:', requestedCount, 'target:', targetCount, 'pageType:', pageType);
+      console.log('[LinkedIn Analyzer] Collection started, requested:', requestedCount, 'target:', targetCount, 'pageType:', pageType, 'mode:', collectionMode);
       sendResponse({ success: true });
     });
     return true;
@@ -81,10 +83,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_COLLECTION_STATE") {
     chrome.storage.local.get(["linkedinPosts", "collectionState"], (result) => {
       const posts = result.linkedinPosts?.posts || [];
-      const state = result.collectionState || { isCollecting: false, targetCount: 0, requestedCount: 0, collectAll: false, pageType: 'main-feed' };
+      const state = result.collectionState || { isCollecting: false, targetCount: 0, requestedCount: 0, collectAll: false, pageType: 'main-feed', collectionMode: 'precision' };
       const displayCount = state.requestedCount || state.targetCount;
       
-      console.log('[LinkedIn Analyzer] State:', posts.length, '/', displayCount, 'isCollecting:', state.isCollecting);
+      console.log('[LinkedIn Analyzer] State:', posts.length, '/', displayCount, 'isCollecting:', state.isCollecting, 'mode:', state.collectionMode);
       
       sendResponse({
         isCollecting: state.isCollecting,
@@ -92,6 +94,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         currentCount: Math.min(posts.length, displayCount),
         collectAll: state.collectAll,
         pageType: state.pageType,
+        collectionMode: state.collectionMode || 'precision',
       });
     });
     return true;

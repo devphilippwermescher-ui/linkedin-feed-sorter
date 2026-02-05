@@ -1,12 +1,16 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { LinkedInPost, SortOption, PageType } from "types/linkedin";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { LinkedInPost, SortOption, PageType, CollectionMode, COLLECTION_MODE_INFO, UserPlan, PLAN_INFO, FREE_PLAN_LIMITS } from "types/linkedin";
 import PostList from "./components/PostList";
 import { 
   HiOutlineHandThumbUp, 
   HiOutlineChatBubbleLeftRight, 
   HiOutlineArrowPath, 
   HiOutlineChartBar,
-  HiOutlineArrowRight
+  HiOutlineArrowRight,
+  HiOutlineBolt,
+  HiOutlineArrowsRightLeft,
+  HiOutlineSparkles,
+  HiOutlineCog6Tooth
 } from "react-icons/hi2";
 import "./styles.css";
 
@@ -37,12 +41,94 @@ const App: React.FC = () => {
     currentCount: 0,
   });
   const [showResults, setShowResults] = useState(false);
+  const [collectionMode, setCollectionMode] = useState<CollectionMode>('lite');
+  const [userPlan, setUserPlan] = useState<UserPlan>('free');
+  const [showSettings, setShowSettings] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     checkCurrentTab();
     checkCollectionState();
     loadPosts();
+    loadCollectionMode();
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+        setShowSettings(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const loadCollectionMode = () => {
+    chrome.storage.local.get(['collectionMode', 'userPlan'], (result) => {
+      const plan = result.userPlan || 'free';
+      setUserPlan(plan);
+      
+      // Set mode based on plan
+      if (result.collectionMode) {
+        // If saved mode is premium-only and user is free, reset to lite
+        if (plan === 'free' && !FREE_PLAN_LIMITS.allowedModes.includes(result.collectionMode)) {
+          setCollectionMode('lite');
+        } else {
+          setCollectionMode(result.collectionMode);
+        }
+      }
+    });
+  };
+
+  const handleModeChange = (mode: CollectionMode) => {
+    // Check if mode is allowed for current plan
+    if (userPlan === 'free' && !FREE_PLAN_LIMITS.allowedModes.includes(mode)) {
+      return; // Don't allow premium modes for free users
+    }
+    setCollectionMode(mode);
+    chrome.storage.local.set({ collectionMode: mode });
+  };
+
+  const handlePlanChange = (plan: UserPlan) => {
+    setUserPlan(plan);
+    chrome.storage.local.set({ userPlan: plan });
+    
+    // If switching to free, reset to allowed values
+    if (plan === 'free') {
+      if (!FREE_PLAN_LIMITS.allowedModes.includes(collectionMode)) {
+        setCollectionMode('lite');
+        chrome.storage.local.set({ collectionMode: 'lite' });
+      }
+      if (postCount !== 'all' && postCount > FREE_PLAN_LIMITS.maxPosts) {
+        setPostCount(FREE_PLAN_LIMITS.maxPosts);
+        setCustomInput(FREE_PLAN_LIMITS.maxPosts.toString());
+      } else if (postCount === 'all') {
+        setPostCount(FREE_PLAN_LIMITS.maxPosts);
+        setCustomInput(FREE_PLAN_LIMITS.maxPosts.toString());
+      }
+    }
+  };
+
+  const isPremiumFeature = (feature: 'mode' | 'count', value: CollectionMode | number | 'all'): boolean => {
+    if (userPlan === 'premium') return false;
+    
+    if (feature === 'mode') {
+      return !FREE_PLAN_LIMITS.allowedModes.includes(value as CollectionMode);
+    }
+    if (feature === 'count') {
+      if (value === 'all') return true;
+      return (value as number) > FREE_PLAN_LIMITS.maxPosts;
+    }
+    return false;
+  };
+
+  const getModeIcon = (mode: CollectionMode) => {
+    switch (mode) {
+      case 'lite': return <HiOutlineBolt className="mode-icon" />;
+      case 'synced': return <HiOutlineArrowsRightLeft className="mode-icon" />;
+      case 'precision': return <HiOutlineSparkles className="mode-icon" />;
+    }
+  };
 
   useEffect(() => {
     if (pageType === 'other') {
@@ -175,6 +261,7 @@ const App: React.FC = () => {
           targetCount,
           pageType: pageType,
           tabId,
+          collectionMode,
         }, () => {
           chrome.tabs.reload(tabId);
         });
@@ -335,7 +422,81 @@ const App: React.FC = () => {
           <img src="icons/icon48.png" alt="Logo" className="header-logo" />
           <h1 className="header-title">LinkedIn Analyzer</h1>
         </div>
-        <span className="free-badge">Free</span>
+        <div className="header-right">
+          <div className="plan-button-wrapper">
+            <button className={`plan-button ${userPlan === 'premium' ? 'premium' : ''}`}>
+              <span className={`plan-button-icon ${userPlan === 'premium' ? 'premium' : ''}`}>
+                {userPlan === 'premium' ? 'P' : 'F'}
+              </span>
+              <span className="plan-button-text">{PLAN_INFO[userPlan].label}</span>
+            </button>
+          </div>
+          <div className="settings-container" ref={settingsRef}>
+            <button 
+              className={`settings-button ${showSettings ? 'active' : ''}`}
+              onClick={() => setShowSettings(!showSettings)}
+              aria-label="Settings"
+            >
+              <HiOutlineCog6Tooth className="settings-icon" />
+            </button>
+            {showSettings && (
+              <div className="settings-dropdown">
+                <div className="settings-section">
+                  <h3 className="settings-section-title">Collection Mode</h3>
+                  <div className="settings-options">
+                    {(Object.keys(COLLECTION_MODE_INFO) as CollectionMode[]).map((mode) => {
+                      const isLocked = isPremiumFeature('mode', mode);
+                      return (
+                        <button
+                          key={mode}
+                          className={`settings-option ${collectionMode === mode ? 'active' : ''} ${isLocked ? 'locked' : ''}`}
+                          onClick={() => handleModeChange(mode)}
+                          disabled={isLocked}
+                        >
+                          {getModeIcon(mode)}
+                          <div className="settings-option-text">
+                            <span className="settings-option-label">{COLLECTION_MODE_INFO[mode].label}</span>
+                            <span className="settings-option-desc">{COLLECTION_MODE_INFO[mode].description}</span>
+                          </div>
+                          {isLocked && <span className="premium-badge">Premium</span>}
+                          {!isLocked && collectionMode === mode && <span className="settings-check">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="settings-divider" />
+                <div className="settings-section">
+                  <h3 className="settings-section-title">Plan</h3>
+                  <div className="settings-options">
+                    <button 
+                      className={`settings-option ${userPlan === 'free' ? 'active' : ''}`}
+                      onClick={() => handlePlanChange('free')}
+                    >
+                      <span className="plan-icon free">F</span>
+                      <div className="settings-option-text">
+                        <span className="settings-option-label">Free</span>
+                        <span className="settings-option-desc">25 posts • Lite mode</span>
+                      </div>
+                      {userPlan === 'free' && <span className="settings-check">✓</span>}
+                    </button>
+                    <button 
+                      className={`settings-option ${userPlan === 'premium' ? 'active' : ''}`}
+                      onClick={() => handlePlanChange('premium')}
+                    >
+                      <span className="plan-icon premium">P</span>
+                      <div className="settings-option-text">
+                        <span className="settings-option-label">Premium</span>
+                        <span className="settings-option-desc">Unlimited • All modes</span>
+                      </div>
+                      {userPlan === 'premium' && <span className="settings-check">✓</span>}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </header>
 
       <div className="setup-content">
@@ -344,21 +505,28 @@ const App: React.FC = () => {
           
           <div className="count-selector">
             <div className="preset-buttons">
-              {PRESET_COUNTS.map((count) => (
-                <button
-                  key={count}
-                  className={`preset-button ${postCount === count ? 'active' : ''}`}
-                  onClick={() => handlePresetClick(count)}
-                >
-                  {count}
-                </button>
-              ))}
+              {PRESET_COUNTS.map((count) => {
+                const isLocked = isPremiumFeature('count', count);
+                return (
+                  <button
+                    key={count}
+                    className={`preset-button ${postCount === count ? 'active' : ''} ${isLocked ? 'locked' : ''}`}
+                    onClick={() => !isLocked && handlePresetClick(count)}
+                    disabled={isLocked}
+                  >
+                    {count}
+                    {isLocked && <span className="lock-icon">🔒</span>}
+                  </button>
+                );
+              })}
               {pageType === 'profile-feed' && (
                 <button
-                  className={`preset-button all-posts ${postCount === 'all' ? 'active' : ''}`}
-                  onClick={() => handlePresetClick('all')}
+                  className={`preset-button all-posts ${postCount === 'all' ? 'active' : ''} ${isPremiumFeature('count', 'all') ? 'locked' : ''}`}
+                  onClick={() => !isPremiumFeature('count', 'all') && handlePresetClick('all')}
+                  disabled={isPremiumFeature('count', 'all')}
                 >
                   All
+                  {isPremiumFeature('count', 'all') && <span className="lock-icon">🔒</span>}
                 </button>
               )}
             </div>
@@ -372,11 +540,13 @@ const App: React.FC = () => {
                 onChange={handleCustomInputChange}
                 onBlur={handleCustomInputBlur}
                 min={1}
-                max={MAX_POSTS}
+                max={userPlan === 'premium' ? MAX_POSTS : FREE_PLAN_LIMITS.maxPosts}
                 placeholder={postCount === 'all' ? 'All' : ''}
-                disabled={postCount === 'all'}
+                disabled={postCount === 'all' || userPlan === 'free'}
               />
-              <span className="max-hint">Max: {MAX_POSTS}</span>
+              <span className="max-hint">
+                {userPlan === 'premium' ? `Max: ${MAX_POSTS}` : `Max: ${FREE_PLAN_LIMITS.maxPosts} (Free)`}
+              </span>
             </div>
           </div>
         </section>
