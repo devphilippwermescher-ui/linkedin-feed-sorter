@@ -454,7 +454,6 @@ function clickLoadMoreButton(): boolean {
   for (const btn of buttons) {
     const text = btn.textContent?.toLowerCase() || '';
     const isVisible = (btn as HTMLElement).offsetParent !== null;
-    
     if (!isVisible) continue;
     
     const isRussianFeedButton = 
@@ -462,20 +461,63 @@ function clickLoadMoreButton(): boolean {
       text.includes('результат') && 
       (text.includes('ленте') || text.includes('ленты') || text.includes('обновлен'));
     
-    const isEnglishFeedButton = 
-      text.includes('show') && 
-      text.includes('more') && 
-      text.includes('result') && 
-      (text.includes('feed') || text.includes('update'));
-    
-    if (isRussianFeedButton || isEnglishFeedButton) {
-      console.log('[LinkedIn Analyzer] Found feed results button:', text.trim().substring(0, 100));
+    if (isRussianFeedButton) {
+      console.log('[LinkedIn Analyzer] Clicking:', text.trim().substring(0, 100));
       btn.click();
       return true;
     }
   }
   
-  console.log('[LinkedIn Analyzer] Feed results button not found');
+  for (const btn of buttons) {
+    const text = btn.textContent?.toLowerCase() || '';
+    const isVisible = (btn as HTMLElement).offsetParent !== null;
+    if (!isVisible) continue;
+    
+    if (text.includes('see') && text.includes('new') && text.includes('post')) {
+      console.log('[LinkedIn Analyzer] Clicking:', text.trim().substring(0, 100));
+      btn.click();
+      return true;
+    }
+    
+    if (btn.getAttribute('data-view-name') === 'feed-end-of-feed') {
+      console.log('[LinkedIn Analyzer] Clicking feed-end-of-feed button');
+      btn.click();
+      return true;
+    }
+  }
+  
+  for (const btn of buttons) {
+    const text = btn.textContent?.toLowerCase() || '';
+    const isVisible = (btn as HTMLElement).offsetParent !== null;
+    if (!isVisible) continue;
+    
+    const isEnglishFeedButton = 
+      text.includes('show') && text.includes('more') && text.includes('result') && 
+      (text.includes('feed') || text.includes('update'));
+    
+    if (isEnglishFeedButton) {
+      console.log('[LinkedIn Analyzer] Clicking:', text.trim().substring(0, 100));
+      btn.click();
+      return true;
+    }
+  }
+  
+  for (const btn of buttons) {
+    const text = btn.textContent?.toLowerCase() || '';
+    const isVisible = (btn as HTMLElement).offsetParent !== null;
+    if (!isVisible) continue;
+    
+    if ((text.includes('показать') && (text.includes('еще') || text.includes('ещё'))) ||
+        (text.includes('show') && text.includes('more')) ||
+        (text.includes('load') && text.includes('more')) ||
+        text.includes('загрузить ещё') ||
+        text.includes('загрузить еще')) {
+      console.log('[LinkedIn Analyzer] Clicking:', text.trim().substring(0, 100));
+      btn.click();
+      return true;
+    }
+  }
+  
   return false;
 }
 
