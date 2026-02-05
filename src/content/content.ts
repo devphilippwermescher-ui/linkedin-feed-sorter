@@ -428,20 +428,42 @@ async function startAutoScroll() {
   doScroll();
 }
 
+function getScrollContainer(): Element | null {
+  // LinkedIn uses different scroll containers
+  const selectors = [
+    '.scaffold-layout__main',
+    '.scaffold-finite-scroll__content', 
+    '.core-rail',
+    'main',
+  ];
+  
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el && el.scrollHeight > el.clientHeight) {
+      return el;
+    }
+  }
+  return null;
+}
+
 function doScroll() {
   if (!isAutoScrolling) {
     console.log('[LinkedIn Analyzer] Scroll stopped');
     return;
   }
   
-  const currentScrollHeight = document.body.scrollHeight;
-  const currentScrollTop = window.scrollY || document.documentElement.scrollTop;
+  const scrollContainer = getScrollContainer();
+  const currentScrollHeight = scrollContainer?.scrollHeight || document.body.scrollHeight;
+  const currentScrollTop = scrollContainer?.scrollTop || window.scrollY || 0;
   
-  console.log('[LinkedIn Analyzer] Scrolling to:', currentScrollHeight, 'current position:', currentScrollTop);
+  console.log('[LinkedIn Analyzer] Scrolling to:', currentScrollHeight, 'current:', currentScrollTop, 'container:', scrollContainer?.className || 'window');
   
-  // Try multiple scroll methods for better compatibility
+  // Scroll using multiple methods
   try {
-    window.scrollTo(0, currentScrollHeight);
+    if (scrollContainer) {
+      scrollContainer.scrollTop = currentScrollHeight;
+    }
+    window.scrollTo({ top: currentScrollHeight, behavior: 'auto' });
     document.documentElement.scrollTop = currentScrollHeight;
     document.body.scrollTop = currentScrollHeight;
   } catch (e) {
