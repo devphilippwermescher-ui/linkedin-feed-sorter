@@ -18,19 +18,31 @@ Chrome extension for analyzing and sorting LinkedIn feed posts by engagement met
 
 ## Installation
 
-### Step 1: Install dependencies
+### Option 1: Download Pre-built Extension (Recommended)
+
+1. Go to the [Releases page](../../releases/latest)
+2. Download `linkedin-feed-sorter.zip`
+3. Extract the ZIP file to a folder
+4. Open Chrome and navigate to `chrome://extensions/`
+5. Enable "Developer mode" in the top right corner
+6. Click "Load unpacked"
+7. Select the extracted folder
+
+### Option 2: Build from Source
+
+#### Step 1: Install dependencies
 
 ```bash
 npm install
 ```
 
-### Step 2: Build the extension
+#### Step 2: Build the extension
 
 ```bash
 npm run build
 ```
 
-### Step 3: Load into Chrome
+#### Step 3: Load into Chrome
 
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable "Developer mode" in the top right corner
