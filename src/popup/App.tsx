@@ -27,7 +27,8 @@ interface CollectionStatus {
 }
 
 const MAX_POSTS = 2000;
-const PRESET_COUNTS = [25, 50, 100, 200, 500];
+const MAIN_FEED_PRESETS = [25, 50, 100, 200, 500];
+const PROFILE_FEED_PRESETS = [25, 50, 100, 250];
 
 const App: React.FC = () => {
   const [posts, setPosts] = useState<LinkedInPost[]>([]);
@@ -505,7 +506,7 @@ const App: React.FC = () => {
           
           <div className="count-selector">
             <div className="preset-buttons">
-              {PRESET_COUNTS.map((count) => {
+              {(pageType === 'profile-feed' ? PROFILE_FEED_PRESETS : MAIN_FEED_PRESETS).map((count) => {
                 const isLocked = isPremiumFeature('count', count);
                 return (
                   <button
