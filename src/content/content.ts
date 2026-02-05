@@ -5,11 +5,11 @@ let lastScrollHeight = 0;
 let noChangeCount = 0;
 let overlayElement: HTMLDivElement | null = null;
 
-const SCROLL_DELAY = 2000;
-const MAX_NO_CHANGE = 2;
-const MAX_NO_NEW_POSTS = 5;
+const SCROLL_DELAY = 3000;
+const MAX_NO_CHANGE = 4;
+const MAX_NO_NEW_POSTS = 8;
 const MAX_BUTTON_ATTEMPTS = 3;
-const CHECK_INTERVAL = 1000;
+const CHECK_INTERVAL = 1500;
 
 let lastPostCount = 0;
 let noNewPostsCount = 0;
@@ -456,40 +456,39 @@ function clickLoadMoreButton(): boolean {
     const isVisible = (btn as HTMLElement).offsetParent !== null;
     if (!isVisible) continue;
     
+    // Russian: "Показать еще результаты для «Обновления в ленте»"
     const isRussianFeedButton = 
       text.includes('показать') && 
       text.includes('результат') && 
       (text.includes('ленте') || text.includes('ленты') || text.includes('обновлен'));
     
     if (isRussianFeedButton) {
-      console.log('[LinkedIn Analyzer] Clicking:', text.trim().substring(0, 100));
+      console.log('[LinkedIn Analyzer] Clicking Russian feed button:', text.trim().substring(0, 100));
+      btn.click();
+      return true;
+    }
+    
+    // English: "show new posts" or "see new posts"
+    if ((text.includes('show') || text.includes('see')) && text.includes('new') && text.includes('post')) {
+      console.log('[LinkedIn Analyzer] Clicking new posts button:', text.trim().substring(0, 100));
       btn.click();
       return true;
     }
   }
   
+  // Commented out other button variants to avoid redirects
+  // TODO: Re-enable after testing
+  /*
   for (const btn of buttons) {
     const text = btn.textContent?.toLowerCase() || '';
     const isVisible = (btn as HTMLElement).offsetParent !== null;
     if (!isVisible) continue;
-    
-    if (text.includes('see') && text.includes('new') && text.includes('post')) {
-      console.log('[LinkedIn Analyzer] Clicking:', text.trim().substring(0, 100));
-      btn.click();
-      return true;
-    }
     
     if (btn.getAttribute('data-view-name') === 'feed-end-of-feed') {
       console.log('[LinkedIn Analyzer] Clicking feed-end-of-feed button');
       btn.click();
       return true;
     }
-  }
-  
-  for (const btn of buttons) {
-    const text = btn.textContent?.toLowerCase() || '';
-    const isVisible = (btn as HTMLElement).offsetParent !== null;
-    if (!isVisible) continue;
     
     const isEnglishFeedButton = 
       text.includes('show') && text.includes('more') && text.includes('result') && 
@@ -500,12 +499,6 @@ function clickLoadMoreButton(): boolean {
       btn.click();
       return true;
     }
-  }
-  
-  for (const btn of buttons) {
-    const text = btn.textContent?.toLowerCase() || '';
-    const isVisible = (btn as HTMLElement).offsetParent !== null;
-    if (!isVisible) continue;
     
     if ((text.includes('показать') && (text.includes('еще') || text.includes('ещё'))) ||
         (text.includes('show') && text.includes('more')) ||
@@ -517,7 +510,9 @@ function clickLoadMoreButton(): boolean {
       return true;
     }
   }
+  */
   
+  console.log('[LinkedIn Analyzer] No matching button found');
   return false;
 }
 
