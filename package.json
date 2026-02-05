@@ -1,6 +1,6 @@
 {
   "name": "linkedin-feed-sorter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Chrome extension to analyze and sort LinkedIn feed posts",
   "scripts": {
     "build": "webpack --mode production",
