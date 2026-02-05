@@ -365,11 +365,46 @@ function hideOverlay() {
   overlayElement = null;
 }
 
-function startAutoScroll() {
+function waitForFeedToLoad(): Promise<void> {
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const maxAttempts = 20;
+    
+    const check = () => {
+      attempts++;
+      const feedContainer = document.querySelector('.scaffold-finite-scroll, [data-finite-scroll-hotkey-context]');
+      const pageHeight = document.body.scrollHeight;
+      const hasContent = pageHeight > 1500;
+      
+      console.log('[LinkedIn Analyzer] Waiting for feed... attempt:', attempts, 'height:', pageHeight, 'feedFound:', !!feedContainer);
+      
+      if ((feedContainer && hasContent) || attempts >= maxAttempts) {
+        console.log('[LinkedIn Analyzer] Feed ready or max attempts reached');
+        resolve();
+      } else {
+        setTimeout(check, 500);
+      }
+    };
+    
+    check();
+  });
+}
+
+async function startAutoScroll() {
   if (isAutoScrolling) {
     console.log('[LinkedIn Analyzer] Already scrolling');
     return;
   }
+  
+  console.log('[LinkedIn Analyzer] *** Starting auto-scroll ***');
+  
+  chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
+    if (response) {
+      showOverlay(response.currentCount, response.targetCount);
+    }
+  });
+  
+  await waitForFeedToLoad();
   
   isAutoScrolling = true;
   lastScrollHeight = 0;
@@ -378,15 +413,7 @@ function startAutoScroll() {
   lastPostCount = 0;
   buttonAttempts = 0;
   
-  console.log('[LinkedIn Analyzer] *** Starting auto-scroll ***');
-  
   parsePostsFromDOM();
-  
-  chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
-    if (response) {
-      showOverlay(response.currentCount, response.targetCount);
-    }
-  });
   
   checkInterval = setInterval(() => {
     if (!isAutoScrolling) {
@@ -408,13 +435,18 @@ function doScroll() {
   }
   
   const currentScrollHeight = document.body.scrollHeight;
+  const currentScrollTop = window.scrollY || document.documentElement.scrollTop;
   
-  console.log('[LinkedIn Analyzer] Scrolling to:', currentScrollHeight);
+  console.log('[LinkedIn Analyzer] Scrolling to:', currentScrollHeight, 'current position:', currentScrollTop);
   
-  window.scrollTo({
-    top: currentScrollHeight,
-    behavior: "instant",
-  });
+  // Try multiple scroll methods for better compatibility
+  try {
+    window.scrollTo(0, currentScrollHeight);
+    document.documentElement.scrollTop = currentScrollHeight;
+    document.body.scrollTop = currentScrollHeight;
+  } catch (e) {
+    console.log('[LinkedIn Analyzer] Scroll error:', e);
+  }
   
   if (currentScrollHeight === lastScrollHeight) {
     noChangeCount++;
