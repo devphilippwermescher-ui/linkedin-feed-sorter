@@ -1,0 +1,71 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Get version from manifest
+        id: version
+        run: |
+          VERSION=$(cat dist/manifest.json | jq -r '.version')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create zip
+        run: |
+          cd dist
+          zip -r ../linkedin-feed-sorter.zip .
+          cd ..
+
+      - name: Delete existing release (if exists)
+        run: |
+          gh release delete v${{ steps.version.outputs.version }} --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: LinkedIn Analyzer v${{ steps.version.outputs.version }}
+          body: |
+            ## LinkedIn Analyzer v${{ steps.version.outputs.version }}
+            
+            ### Installation
+            1. Download `linkedin-feed-sorter.zip`
+            2. Extract the zip file
+            3. Open Chrome → `chrome://extensions/`
+            4. Enable "Developer mode"
+            5. Click "Load unpacked" and select the extracted folder
+            
+            ### Changes
+            - Auto-generated release from commit ${{ github.sha }}
+          files: linkedin-feed-sorter.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
