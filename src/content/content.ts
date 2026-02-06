@@ -1,3 +1,5 @@
+import * as XLSX from 'xlsx';
+
 type CollectionMode = 'lite' | 'synced' | 'precision';
 
 interface PostData {
@@ -1412,10 +1414,18 @@ function renderQuickPanel(feedToggleWrapper: Element): void {
         color: #0077B5;
       }
       
+      .la-title.premium .la-icon {
+        color: #d97706;
+      }
+      
       .la-title-text {
         font-size: 13px;
         font-weight: 600;
         color: #0077B5;
+      }
+      
+      .la-title.premium .la-title-text {
+        color: #d97706;
       }
       
       .la-count-selector {
@@ -1545,6 +1555,155 @@ function renderQuickPanel(feedToggleWrapper: Element): void {
         height: 14px;
       }
       
+      .la-export-row {
+        display: none;
+        align-items: center;
+        gap: 6px;
+      }
+      
+      .la-export-wrapper {
+        flex: 1;
+        position: relative;
+      }
+      
+      .la-export-trigger {
+        width: 100%;
+        padding: 8px 16px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid #dbeafe;
+        border-radius: 8px;
+        background: #eff6ff;
+        color: #2563eb;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+      
+      .la-export-trigger:hover {
+        background: #dbeafe;
+        border-color: #93c5fd;
+      }
+      
+      .la-export-trigger svg {
+        width: 14px;
+        height: 14px;
+      }
+      
+      .la-export-dropdown {
+        display: none;
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06);
+        padding: 8px;
+        z-index: 100;
+        animation: la-dropdown-in 0.18s ease;
+        gap: 6px;
+      }
+      
+      .la-export-dropdown.open {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      @keyframes la-dropdown-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      
+      .la-export-option {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border: 1px solid #e5e7eb;
+        background: #fafafa;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #374151;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        font-family: inherit;
+      }
+      
+      .la-export-option:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      }
+      
+      .la-export-option--excel:hover {
+        background: #f0fdf4;
+        border-color: #86efac;
+      }
+      
+      .la-export-option--csv:hover {
+        background: #eff6ff;
+        border-color: #93c5fd;
+      }
+      
+      .la-export-option--json:hover {
+        background: #fffbeb;
+        border-color: #fcd34d;
+      }
+      
+      .la-export-option-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 800;
+        flex-shrink: 0;
+        letter-spacing: -0.3px;
+      }
+      
+      .la-export-option-icon--excel {
+        background: #dcfce7;
+        color: #16a34a;
+        border: 1px solid #bbf7d0;
+      }
+      
+      .la-export-option-icon--csv {
+        background: #dbeafe;
+        color: #2563eb;
+        border: 1px solid #bfdbfe;
+      }
+      
+      .la-export-option-icon--json {
+        background: #fef3c7;
+        color: #d97706;
+        border: 1px solid #fde68a;
+      }
+      
+      .la-export-option-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        text-align: left;
+      }
+      
+      .la-export-option-text strong {
+        font-size: 13px;
+        font-weight: 600;
+        color: #1a1a1a;
+      }
+      
+      .la-export-option-text span {
+        font-size: 11px;
+        color: #9ca3af;
+      }
+      
       .la-status {
         display: none;
         align-items: center;
@@ -1625,11 +1784,11 @@ function renderQuickPanel(feedToggleWrapper: Element): void {
     </style>
     
     <div class="la-header">
-      <div class="la-title">
+      <div class="la-title${isFree ? '' : ' premium'}">
         <svg class="la-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
         </svg>
-        <span class="la-title-text">Quick Panel</span>
+        <span class="la-title-text">LinkedIn Analyzer</span>
       </div>
       
       <div class="la-count-selector">
@@ -1673,13 +1832,48 @@ function renderQuickPanel(feedToggleWrapper: Element): void {
       <span id="la-status-text">Collecting posts...</span>
     </div>
     
-    <button class="la-restore-btn" id="la-restore-btn" style="display: none;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-        <path d="M3 3v5h5"/>
-      </svg>
-      Restore Original Feed
-    </button>
+    <div class="la-export-row" id="la-export-row">
+      <div class="la-export-wrapper">
+        <button class="la-export-trigger" id="la-export-trigger">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Export Data
+        </button>
+        <div class="la-export-dropdown" id="la-export-dropdown">
+        <button class="la-export-option la-export-option--excel" data-export="excel">
+          <div class="la-export-option-icon la-export-option-icon--excel">XLS</div>
+          <div class="la-export-option-text">
+            <strong>Excel</strong>
+            <span>Spreadsheet (.xlsx)</span>
+          </div>
+        </button>
+        <button class="la-export-option la-export-option--csv" data-export="csv">
+          <div class="la-export-option-icon la-export-option-icon--csv">CSV</div>
+          <div class="la-export-option-text">
+            <strong>CSV</strong>
+            <span>Comma-separated (.csv)</span>
+          </div>
+        </button>
+        <button class="la-export-option la-export-option--json" data-export="json">
+          <div class="la-export-option-icon la-export-option-icon--json">{ }</div>
+          <div class="la-export-option-text">
+            <strong>JSON</strong>
+            <span>Raw data (.json)</span>
+          </div>
+        </button>
+      </div>
+      </div>
+      <button class="la-restore-btn" id="la-restore-btn" style="flex: unset; padding: 8px 12px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+          <path d="M3 3v5h5"/>
+        </svg>
+        Restore
+      </button>
+    </div>
   `;
   
   // Insert after the feed toggle
@@ -1698,6 +1892,7 @@ let qp_isActive = false;
 let qp_sortType: string | null = null;
 let qp_targetCount = 25;
 let qp_posts: Map<string, any> = new Map();
+let qp_sortedPosts: PostData[] = [];
 let qp_isScrolling = false;
 let qp_scrollTimeout: ReturnType<typeof setTimeout> | null = null;
 let qp_checkInterval: ReturnType<typeof setInterval> | null = null;
@@ -1706,10 +1901,10 @@ let qp_noChangeCount = 0;
 let qp_noNewPostsCount = 0;
 let qp_lastPostCount = 0;
 
-const QP_SCROLL_DELAY = 1200;
+const QP_SCROLL_DELAY = 3000;
 const QP_CHECK_INTERVAL = 1500;
 const QP_MAX_NO_CHANGE = 4;
-const QP_MAX_NO_NEW_POSTS = 6;
+const QP_MAX_NO_NEW_POSTS = 8;
 
 function setupSortControlsListeners(): void {
   const sortButtons = document.querySelectorAll('.la-sort-btn');
@@ -1748,6 +1943,34 @@ function setupSortControlsListeners(): void {
   
   if (restoreBtn) {
     restoreBtn.addEventListener('click', () => location.reload());
+  }
+  
+  const exportTrigger = document.getElementById('la-export-trigger');
+  const exportDropdown = document.getElementById('la-export-dropdown');
+  
+  if (exportTrigger && exportDropdown) {
+    exportTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exportDropdown.classList.toggle('open');
+    });
+    
+    document.addEventListener('click', () => {
+      exportDropdown.classList.remove('open');
+    });
+    
+    exportDropdown.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    
+    document.querySelectorAll('.la-export-option').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const format = btn.getAttribute('data-export');
+        if (format === 'excel') qp_exportExcel();
+        else if (format === 'csv') qp_exportCSV();
+        else if (format === 'json') qp_exportJSON();
+        exportDropdown.classList.remove('open');
+      });
+    });
   }
 }
 
@@ -1884,10 +2107,14 @@ function qp_doScroll(): void {
     console.log('[QP] Scroll error:', e);
   }
   
-  setTimeout(() => qp_collectFromDOM(), 800);
+  setTimeout(() => {
+    qp_collectFromDOM();
+    qp_updateOverlay(qp_posts.size, qp_targetCount);
+  }, 1200);
   
   if (currentScrollHeight === qp_lastScrollHeight) {
     qp_noChangeCount++;
+    console.log('[QP] No scroll change, attempt:', qp_noChangeCount);
     if (qp_noChangeCount >= QP_MAX_NO_CHANGE) qp_tryClickLoadMore();
   } else {
     qp_noChangeCount = 0;
@@ -2036,6 +2263,8 @@ async function qp_applySort(): Promise<void> {
     numShares: p.numShares || 0,
   }));
   
+  qp_sortedPosts = data;
+  
   // skipPlaceholders=true: don't create "Unknown" cards for posts not in DOM
   await reorderFeedPosts(urns, data, true);
   
@@ -2056,8 +2285,75 @@ function qp_finish(): void {
   const restoreBtn = document.getElementById('la-restore-btn');
   if (restoreBtn) restoreBtn.style.display = 'flex';
   
+  const exportRow = document.getElementById('la-export-row');
+  if (exportRow && qp_sortedPosts.length > 0) exportRow.style.display = 'flex';
+  
   document.querySelectorAll('.la-sort-btn').forEach(b => b.classList.remove('loading'));
   document.getElementById('la-status')?.classList.remove('visible');
+}
+
+function qp_getExportData() {
+  return qp_sortedPosts.map((p, i) => ({
+    '#': i + 1,
+    'Author': p.authorName || '',
+    'Post Text': (p.text || '').substring(0, 500),
+    'Likes': p.numLikes || 0,
+    'Comments': p.numComments || 0,
+    'Shares': p.numShares || 0,
+    'Post URL': p.activityUrn ? `https://www.linkedin.com/feed/update/${p.activityUrn}` : '',
+  }));
+}
+
+function qp_triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function qp_exportExcel(): void {
+  const data = qp_getExportData();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 4 }, { wch: 25 }, { wch: 60 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 50 }
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'LinkedIn Posts');
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  qp_triggerDownload(
+    new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    'linkedin-posts.xlsx'
+  );
+}
+
+function qp_exportCSV(): void {
+  const data = qp_getExportData();
+  const headers = Object.keys(data[0] || {});
+  const csvRows = [
+    headers.join(','),
+    ...data.map(row =>
+      headers.map(h => {
+        const val = String((row as any)[h] ?? '');
+        return `"${val.replace(/"/g, '""')}"`;
+      }).join(',')
+    )
+  ];
+  qp_triggerDownload(
+    new Blob(['\uFEFF' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' }),
+    'linkedin-posts.csv'
+  );
+}
+
+function qp_exportJSON(): void {
+  const data = qp_getExportData();
+  qp_triggerDownload(
+    new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
+    'linkedin-posts.json'
+  );
 }
 
 function qp_updateUI(sortType: string, count: number, _state: string): void {

@@ -559,7 +559,7 @@ const App: React.FC = () => {
           </div>
         </div>
         <footer className="app-footer">
-          <p>Having trouble? Email me at support@social-analyzer.com</p>
+          <p>Having trouble? Email me at <a href="mailto:dev.philipp.wermescher@gmail.com" style={{color: '#034C9D', textDecoration: 'underline', cursor: 'pointer'}}>dev.philipp.wermescher@gmail.com</a></p>
         </footer>
       </div>
     );
@@ -746,7 +746,7 @@ const App: React.FC = () => {
       )}
 
       <footer className="app-footer">
-        <p>Having trouble? Email me at support@social-analyzer.com</p>
+        <p>Having trouble? Email me at <a href="mailto:dev.philipp.wermescher@gmail.com" style={{color: '#034C9D', textDecoration: 'underline', cursor: 'pointer'}}>dev.philipp.wermescher@gmail.com</a></p>
       </footer>
     </div>
   );
