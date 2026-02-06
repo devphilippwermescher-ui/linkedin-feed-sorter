@@ -2286,7 +2286,7 @@ function qp_finish(): void {
   if (restoreBtn) restoreBtn.style.display = 'flex';
   
   const exportRow = document.getElementById('la-export-row');
-  if (exportRow && qp_sortedPosts.length > 0) exportRow.style.display = 'flex';
+  if (exportRow && qp_sortedPosts.length > 0 && qp_userPlan === 'premium') exportRow.style.display = 'flex';
   
   document.querySelectorAll('.la-sort-btn').forEach(b => b.classList.remove('loading'));
   document.getElementById('la-status')?.classList.remove('visible');

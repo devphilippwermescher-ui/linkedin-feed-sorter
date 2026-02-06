@@ -537,7 +537,7 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            {sortedPosts.length > 0 && (
+            {sortedPosts.length > 0 && userPlan === 'premium' && (
               <div className="export-section">
                 <div className="export-header">
                   <HiOutlineArrowDownTray className="export-header-icon" />
@@ -608,7 +608,7 @@ const App: React.FC = () => {
           <h1 className="header-title">LinkedIn Analyzer</h1>
         </div>
         <div className="header-right">
-          {sortedPosts.length > 0 && phase === 'setup' && (
+          {sortedPosts.length > 0 && phase === 'setup' && userPlan === 'premium' && (
             <button className="header-export-btn" onClick={handleGoToExport} title="Export sorted data">
               <HiOutlineDocumentArrowDown className="header-export-icon" />
             </button>
