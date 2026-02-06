@@ -417,7 +417,7 @@ async function ensurePostsLoadedInDOM(targetUrns: string[]): Promise<{ loaded: n
 }
 
 // Reorder feed posts based on sorted URN list
-async function reorderFeedPosts(sortedUrns: string[], postsData: PostData[] = []): Promise<{ success: boolean; reorderedCount: number; message: string }> {
+async function reorderFeedPosts(sortedUrns: string[], postsData: PostData[] = [], skipPlaceholders: boolean = false): Promise<{ success: boolean; reorderedCount: number; message: string }> {
   console.log('[LinkedIn Analyzer] Reordering feed with', sortedUrns.length, 'posts,', postsData.length, 'with data');
   
   // Create a map of post data for quick lookup
@@ -510,11 +510,11 @@ async function reorderFeedPosts(sortedUrns: string[], postsData: PostData[] = []
     const processedUrns = new Set<string>();
     
     // First, add posts in the sorted order
+    // IMPORTANT: Move original DOM nodes (not clone) to preserve Ember event listeners
     let createdCount = 0;
     for (const urn of sortedUrns) {
       const container = postContainers.get(urn);
       
-      // Check if container has real content (not just an empty placeholder)
       const hasRealContent = container && (
         container.querySelector('.feed-shared-update-v2__description') ||
         container.querySelector('.update-components-actor') ||
@@ -523,18 +523,15 @@ async function reorderFeedPosts(sortedUrns: string[], postsData: PostData[] = []
       );
       
       if (container && hasRealContent && !processedUrns.has(urn)) {
-        // Clone the entire container with all its content
-        const clone = container.cloneNode(true) as Element;
-        // Update the hotkey item index for accessibility
-        const hotkeyEl = clone.querySelector('[data-finite-scroll-hotkey-item]');
+        // Move the original element (preserves all event listeners)
+        const hotkeyEl = container.querySelector('[data-finite-scroll-hotkey-item]');
         if (hotkeyEl) {
           hotkeyEl.setAttribute('data-finite-scroll-hotkey-item', reorderedCount.toString());
         }
-        fragment.appendChild(clone);
+        fragment.appendChild(container);
         reorderedCount++;
         processedUrns.add(urn);
-      } else if (postsDataMap.has(urn) && !processedUrns.has(urn)) {
-        // Post not in DOM (or is empty placeholder) but we have data - create a card
+      } else if (!skipPlaceholders && postsDataMap.has(urn) && !processedUrns.has(urn)) {
         const postData = postsDataMap.get(urn)!;
         console.log('[LinkedIn Analyzer] Creating card for missing/empty post:', postData.authorName);
         const card = createPostCard(postData, reorderedCount);
@@ -549,38 +546,36 @@ async function reorderFeedPosts(sortedUrns: string[], postsData: PostData[] = []
       console.log('[LinkedIn Analyzer] Created', createdCount, 'cards for missing posts');
     }
     
-    // Add any remaining posts that weren't in the sorted list (e.g., ads, special content)
+    // Add any remaining posts that weren't in the sorted list
     postContainers.forEach((container, urn) => {
       if (!processedUrns.has(urn)) {
-        // Skip empty placeholders
         const hasRealContent = container.querySelector('.feed-shared-update-v2__description') ||
           container.querySelector('.update-components-actor') ||
           container.querySelector('.feed-shared-text') ||
           container.querySelector('.update-components-text');
         
         if (hasRealContent) {
-          const clone = container.cloneNode(true) as Element;
-          const hotkeyEl = clone.querySelector('[data-finite-scroll-hotkey-item]');
+          const hotkeyEl = container.querySelector('[data-finite-scroll-hotkey-item]');
           if (hotkeyEl) {
             hotkeyEl.setAttribute('data-finite-scroll-hotkey-item', reorderedCount.toString());
           }
-          fragment.appendChild(clone);
+          fragment.appendChild(container);
           reorderedCount++;
         }
       }
     });
     
-    // Clear the feed container
+    // Clear any remaining children from the feed container
     while (feedContainer.firstChild) {
       feedContainer.removeChild(feedContainer.firstChild);
     }
     
-    // Append all reordered posts
+    // Append all reordered posts (original nodes with preserved event listeners)
     feedContainer.appendChild(fragment);
     
-    // Re-add other elements at the end
+    // Move back other elements (not clone) to preserve their event listeners too
     otherElements.forEach((el) => {
-      feedContainer.appendChild(el.cloneNode(true));
+      feedContainer.appendChild(el);
     });
   
     isReordered = true;
@@ -1337,18 +1332,50 @@ function stopAutoScroll() {
 
 // Inject sort controls into LinkedIn feed page
 function injectSortControls(): void {
-  // Check if already injected
-  if (document.getElementById('linkedin-analyzer-sort-controls')) {
-    return;
+  if (document.getElementById('linkedin-analyzer-sort-controls')) return;
+  
+  let feedToggleWrapper: Element | null = null;
+  
+  // 1) .feed-sort-toggle-dsa__wrapper
+  feedToggleWrapper = document.querySelector('.feed-sort-toggle-dsa__wrapper');
+  
+  // 2) HR with feed-index-sort-border class (unique to sort dropdown)
+  if (!feedToggleWrapper) {
+    const hr = document.querySelector('hr.feed-index-sort-border');
+    if (hr) {
+      feedToggleWrapper = hr.closest('.artdeco-dropdown') || hr.closest('.mb2');
+    }
   }
   
-  // Find the feed sort toggle wrapper
-  const feedToggleWrapper = document.querySelector('.feed-sort-toggle-dsa__wrapper');
+  // 3) Dropdown with sort text
   if (!feedToggleWrapper) {
-    console.log('[LinkedIn Analyzer] Feed toggle wrapper not found, retrying...');
+    const buttons = document.querySelectorAll('button.artdeco-dropdown__trigger');
+    for (const btn of buttons) {
+      const text = btn.textContent || '';
+      if (text.includes('Сортировать') || text.includes('Sort by') || text.includes('Sortieren')) {
+        feedToggleWrapper = btn.closest('.artdeco-dropdown');
+        break;
+      }
+    }
+  }
+  
+  if (!feedToggleWrapper) {
+    console.log('[LinkedIn Analyzer] Feed toggle not found, retrying...');
     setTimeout(injectSortControls, 2000);
     return;
   }
+  
+  console.log('[LinkedIn Analyzer] Feed toggle found:', feedToggleWrapper.className);
+  
+  // Load user plan before rendering
+  chrome.storage.local.get(['userPlan'], (result) => {
+    qp_userPlan = result.userPlan || 'free';
+    renderQuickPanel(feedToggleWrapper!);
+  });
+}
+
+function renderQuickPanel(feedToggleWrapper: Element): void {
+  const isFree = qp_userPlan === 'free';
   
   // Create our sort controls container
   const sortControls = document.createElement('div');
@@ -1423,6 +1450,17 @@ function injectSortControls(): void {
         background: #0077B5;
         color: white;
         border-color: #0077B5;
+      }
+      
+      .la-count-btn.locked {
+        opacity: 0.5;
+        cursor: pointer;
+      }
+      
+      .la-count-btn.locked:hover {
+        border-color: #f59e0b;
+        color: #d97706;
+        opacity: 0.7;
       }
       
       .la-sort-row {
@@ -1535,6 +1573,55 @@ function injectSortControls(): void {
       @keyframes la-spin {
         to { transform: rotate(360deg); }
       }
+      
+      #la-premium-modal-backdrop {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100vw; height: 100vh;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 999998;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      #la-premium-modal {
+        background: white;
+        border-radius: 16px;
+        padding: 32px 28px;
+        width: 400px;
+        max-width: 90vw;
+        position: relative;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      
+      .la-pm-close {
+        position: absolute; top: 12px; right: 14px;
+        background: none; border: none;
+        font-size: 20px; color: #9ca3af;
+        cursor: pointer; padding: 4px; line-height: 1;
+      }
+      .la-pm-close:hover { color: #4b5563; }
+      .la-pm-icon { font-size: 36px; text-align: center; margin-bottom: 8px; }
+      .la-pm-title { font-size: 22px; font-weight: 700; color: #1a1a1a; text-align: center; margin-bottom: 4px; }
+      .la-pm-subtitle { font-size: 14px; color: #6b7280; text-align: center; margin-bottom: 24px; }
+      .la-pm-features { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+      .la-pm-feature { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; background: #fefce8; border: 1px solid #fde68a; border-radius: 12px; }
+      .la-pm-feature-icon { font-size: 22px; flex-shrink: 0; }
+      .la-pm-feature-text { display: flex; flex-direction: column; gap: 2px; }
+      .la-pm-feature-text strong { font-size: 14px; font-weight: 600; color: #1a1a1a; }
+      .la-pm-feature-text span { font-size: 12px; color: #6b7280; }
+      .la-pm-cta {
+        width: 100%; padding: 16px 24px;
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        color: white; border: none; border-radius: 12px;
+        font-size: 16px; font-weight: 700; cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 16px rgba(245, 158, 11, 0.35);
+      }
+      .la-pm-cta:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5); }
+      .la-pm-price { font-size: 13px; color: #9ca3af; text-align: center; margin-top: 12px; }
     </style>
     
     <div class="la-header">
@@ -1548,8 +1635,8 @@ function injectSortControls(): void {
       <div class="la-count-selector">
         <span class="la-count-label">Posts:</span>
         <button class="la-count-btn active" data-count="25">25</button>
-        <button class="la-count-btn" data-count="50">50</button>
-        <button class="la-count-btn" data-count="100">100</button>
+        <button class="la-count-btn${isFree ? ' locked' : ''}" data-count="50">50${isFree ? ' 🔒' : ''}</button>
+        <button class="la-count-btn${isFree ? ' locked' : ''}" data-count="100">100${isFree ? ' 🔒' : ''}</button>
       </div>
     </div>
     
@@ -1606,6 +1693,7 @@ function injectSortControls(): void {
 
 // Quick Panel state
 let qp_selectedCount = 25;
+let qp_userPlan: 'free' | 'premium' = 'free';
 let qp_isActive = false;
 let qp_sortType: string | null = null;
 let qp_targetCount = 25;
@@ -1631,9 +1719,17 @@ function setupSortControlsListeners(): void {
   countButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
       if (qp_isActive) return;
+      
+      const count = parseInt(btn.getAttribute('data-count') || '25', 10);
+      
+      if (btn.classList.contains('locked')) {
+        qp_showPremiumModal();
+        return;
+      }
+      
       countButtons.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      qp_selectedCount = parseInt(btn.getAttribute('data-count') || '25', 10);
+      qp_selectedCount = count;
     });
   });
   
@@ -1653,6 +1749,65 @@ function setupSortControlsListeners(): void {
   if (restoreBtn) {
     restoreBtn.addEventListener('click', () => location.reload());
   }
+}
+
+function qp_showPremiumModal(): void {
+  const existing = document.getElementById('la-premium-modal-backdrop');
+  if (existing) existing.remove();
+  
+  const backdrop = document.createElement('div');
+  backdrop.id = 'la-premium-modal-backdrop';
+  backdrop.innerHTML = `
+    <div id="la-premium-modal">
+      <button class="la-pm-close" id="la-pm-close">&times;</button>
+      <div class="la-pm-icon">⚡</div>
+      <div class="la-pm-title">Upgrade to Premium</div>
+      <div class="la-pm-subtitle">Unlock the full power of LinkedIn Analyzer</div>
+      <div class="la-pm-features">
+        <div class="la-pm-feature">
+          <span class="la-pm-feature-icon">📊</span>
+          <div class="la-pm-feature-text">
+            <strong>Sort up to 2000 posts</strong>
+            <span>Free plan is limited to 25 posts</span>
+          </div>
+        </div>
+        <div class="la-pm-feature">
+          <span class="la-pm-feature-icon">🔍</span>
+          <div class="la-pm-feature-text">
+            <strong>Deep feed analysis</strong>
+            <span>Analyze large feeds with precision</span>
+          </div>
+        </div>
+        <div class="la-pm-feature">
+          <span class="la-pm-feature-icon">⚡</span>
+          <div class="la-pm-feature-text">
+            <strong>Quick Panel — unlimited</strong>
+            <span>Sort 50, 100+ posts directly from feed</span>
+          </div>
+        </div>
+        <div class="la-pm-feature">
+          <span class="la-pm-feature-icon">🚀</span>
+          <div class="la-pm-feature-text">
+            <strong>Priority support</strong>
+            <span>Get help faster when you need it</span>
+          </div>
+        </div>
+      </div>
+      <button class="la-pm-cta" id="la-pm-cta">Get Premium</button>
+      <div class="la-pm-price">Starting at $4.99/month</div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  
+  document.getElementById('la-pm-close')?.addEventListener('click', () => backdrop.remove());
+  document.getElementById('la-pm-cta')?.addEventListener('click', () => {
+    // TODO: link to payment page
+    backdrop.remove();
+  });
 }
 
 function qp_checkPending(): void {
@@ -1800,15 +1955,27 @@ function qp_collectFromDOM(): void {
   const postElements = document.querySelectorAll('[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"]');
   
   postElements.forEach((postEl) => {
+    // Skip occluded/empty elements (LinkedIn virtual scroll placeholders)
+    const hasVisibleContent = postEl.querySelector('.update-components-actor') ||
+                              postEl.querySelector('.feed-shared-update-v2__description') ||
+                              postEl.querySelector('.update-components-text') ||
+                              postEl.querySelector('.feed-shared-text');
+    if (!hasVisibleContent) return;
+    
     const urn = postEl.getAttribute('data-urn') || 
                 postEl.getAttribute('data-id') ||
                 postEl.closest('[data-id]')?.getAttribute('data-id');
     
-    if (!urn || qp_posts.has(urn)) return;
+    if (!urn) return;
     
     const post = parsePostElement(postEl);
     if (post && post.activityUrn) {
-      qp_posts.set(post.activityUrn, post);
+      // Update if first time or previous data was incomplete
+      const existing = qp_posts.get(post.activityUrn);
+      if (!existing || existing.authorName === 'Unknown' || 
+          (existing.numLikes === 0 && existing.numComments === 0 && post.numLikes > 0)) {
+        qp_posts.set(post.activityUrn, post);
+      }
     }
   });
 }
@@ -1835,18 +2002,28 @@ async function qp_applySort(): Promise<void> {
   if (!qp_sortType) return;
   
   console.log('[QP] Applying sort:', qp_sortType);
-  qp_updateOverlayText('Sorting posts...');
+  qp_updateOverlayText('Scrolling to top...');
+  
+  // Scroll to top first so LinkedIn re-renders posts in DOM
+  window.scrollTo({ top: 0, behavior: 'auto' });
+  await new Promise(r => setTimeout(r, 1500));
+  
+  // Re-collect posts that are now visible at the top
+  qp_collectFromDOM();
   
   const posts = Array.from(qp_posts.values());
-  console.log('[QP] Got', posts.length, 'posts');
+  // Filter out posts with no useful data (occluded when collected)
+  const validPosts = posts.filter(p => p.authorName !== 'Unknown' || p.numLikes > 0 || p.numComments > 0);
+  console.log('[QP] Got', posts.length, 'total,', validPosts.length, 'with data');
   
-  if (posts.length === 0) {
+  if (validPosts.length === 0) {
     qp_updateOverlayText('No posts found');
     setTimeout(() => qp_finish(), 2000);
     return;
   }
   
-  const sorted = sortPosts(posts, qp_sortType);
+  qp_updateOverlayText('Sorting posts...');
+  const sorted = sortPosts(validPosts, qp_sortType);
   qp_updateOverlayText(`Applying ${sorted.length} posts...`);
   
   const urns = sorted.map(p => p.activityUrn);
@@ -1859,7 +2036,8 @@ async function qp_applySort(): Promise<void> {
     numShares: p.numShares || 0,
   }));
   
-  await reorderFeedPosts(urns, data);
+  // skipPlaceholders=true: don't create "Unknown" cards for posts not in DOM
+  await reorderFeedPosts(urns, data, true);
   
   qp_updateOverlayText('Done!');
   await new Promise(r => setTimeout(r, 500));
@@ -2054,21 +2232,29 @@ function sortPosts(posts: any[], sortType: string): any[] {
 
 // Initialize inline controls when page is ready
 function initInlineControls(): void {
-  // Only inject on feed pages
   if (window.location.pathname === '/feed/' || window.location.pathname === '/feed') {
-    // Wait for feed to load
     const checkFeed = setInterval(() => {
-      const feedToggle = document.querySelector('.feed-sort-toggle-dsa__wrapper');
+      let feedToggle: Element | null = document.querySelector('.feed-sort-toggle-dsa__wrapper');
+      if (!feedToggle) {
+        const hr = document.querySelector('hr.feed-index-sort-border');
+        if (hr) feedToggle = hr.closest('.artdeco-dropdown') || hr.closest('.mb2');
+      }
+      if (!feedToggle) {
+        const buttons = document.querySelectorAll('button.artdeco-dropdown__trigger');
+        for (const btn of buttons) {
+          const text = btn.textContent || '';
+          if (text.includes('Сортировать') || text.includes('Sort by') || text.includes('Sortieren')) {
+            feedToggle = btn.closest('.artdeco-dropdown');
+            break;
+          }
+        }
+      }
       if (feedToggle) {
         clearInterval(checkFeed);
         injectSortControls();
-        
-        // Check for pending quick sort after injection
         checkPendingQuickSort();
       }
     }, 1000);
-    
-    // Stop checking after 30 seconds
     setTimeout(() => clearInterval(checkFeed), 30000);
   }
 }

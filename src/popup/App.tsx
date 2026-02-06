@@ -1,25 +1,20 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { LinkedInPost, SortOption, PageType, CollectionMode, COLLECTION_MODE_INFO, UserPlan, PLAN_INFO, FREE_PLAN_LIMITS } from "types/linkedin";
-import PostList from "./components/PostList";
+import React, { useState, useEffect, useRef } from "react";
+import { SortOption, PageType, UserPlan, PLAN_INFO, FREE_PLAN_LIMITS } from "types/linkedin";
 import { 
   HiOutlineHandThumbUp, 
   HiOutlineChatBubbleLeftRight, 
   HiOutlineArrowPath, 
   HiOutlineChartBar,
   HiOutlineArrowRight,
-  HiOutlineBolt,
-  HiOutlineArrowsRightLeft,
-  HiOutlineSparkles,
-  HiOutlineCog6Tooth,
   HiOutlineArrowsUpDown,
-  HiOutlineArrowUturnLeft
+  HiOutlineArrowUturnLeft,
+  HiOutlineStar,
+  HiOutlineChartBarSquare,
+  HiOutlineMagnifyingGlassCircle,
+  HiOutlineBolt,
+  HiOutlineRocketLaunch
 } from "react-icons/hi2";
 import "./styles.css";
-
-interface StoredPosts {
-  posts: LinkedInPost[];
-  lastUpdate: number;
-}
 
 interface CollectionStatus {
   isCollecting: boolean;
@@ -28,12 +23,13 @@ interface CollectionStatus {
   collectAll?: boolean;
 }
 
+type AppPhase = 'setup' | 'collecting' | 'sorting' | 'done' | 'error';
+
 const MAX_POSTS = 2000;
 const MAIN_FEED_PRESETS = [25, 50, 100, 200, 500];
 const PROFILE_FEED_PRESETS = [25, 50, 100, 250];
 
 const App: React.FC = () => {
-  const [posts, setPosts] = useState<LinkedInPost[]>([]);
   const [postCount, setPostCount] = useState<number | 'all'>(25);
   const [customInput, setCustomInput] = useState<string>("25");
   const [selectedFilter, setSelectedFilter] = useState<SortOption>("likes");
@@ -43,95 +39,32 @@ const App: React.FC = () => {
     targetCount: 0,
     currentCount: 0,
   });
-  const [showResults, setShowResults] = useState(false);
-  const [collectionMode, setCollectionMode] = useState<CollectionMode>('lite');
+  const [phase, setPhase] = useState<AppPhase>('setup');
+  const [sortedCount, setSortedCount] = useState(0);
+  const [errorMessage, setErrorMessage] = useState('');
   const [userPlan, setUserPlan] = useState<UserPlan>('free');
-  const [showSettings, setShowSettings] = useState(false);
-  const [isApplyingToFeed, setIsApplyingToFeed] = useState(false);
-  const [feedApplied, setFeedApplied] = useState(false);
-  const settingsRef = useRef<HTMLDivElement>(null);
+  const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const autoSortTriggered = useRef(false);
 
   useEffect(() => {
     checkCurrentTab();
     checkCollectionState();
-    loadPosts();
-    loadCollectionMode();
+    loadUserPlan();
   }, []);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
-        setShowSettings(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const loadCollectionMode = () => {
-    chrome.storage.local.get(['collectionMode', 'userPlan'], (result) => {
-      const plan = result.userPlan || 'free';
-      setUserPlan(plan);
-      
-      // Set mode based on plan
-      if (result.collectionMode) {
-        // If saved mode is premium-only and user is free, reset to lite
-        if (plan === 'free' && !FREE_PLAN_LIMITS.allowedModes.includes(result.collectionMode)) {
-          setCollectionMode('lite');
-        } else {
-          setCollectionMode(result.collectionMode);
-        }
-      }
+  const loadUserPlan = () => {
+    chrome.storage.local.get(['userPlan'], (result) => {
+      setUserPlan(result.userPlan || 'free');
     });
   };
 
-  const handleModeChange = (mode: CollectionMode) => {
-    // Check if mode is allowed for current plan
-    if (userPlan === 'free' && !FREE_PLAN_LIMITS.allowedModes.includes(mode)) {
-      return; // Don't allow premium modes for free users
-    }
-    setCollectionMode(mode);
-    chrome.storage.local.set({ collectionMode: mode });
-  };
-
-  const handlePlanChange = (plan: UserPlan) => {
-    setUserPlan(plan);
-    chrome.storage.local.set({ userPlan: plan });
-    
-    // If switching to free, reset to allowed values
-    if (plan === 'free') {
-      if (!FREE_PLAN_LIMITS.allowedModes.includes(collectionMode)) {
-        setCollectionMode('lite');
-        chrome.storage.local.set({ collectionMode: 'lite' });
-      }
-      if (postCount !== 'all' && postCount > FREE_PLAN_LIMITS.maxPosts) {
-        setPostCount(FREE_PLAN_LIMITS.maxPosts);
-        setCustomInput(FREE_PLAN_LIMITS.maxPosts.toString());
-      } else if (postCount === 'all') {
-        setPostCount(FREE_PLAN_LIMITS.maxPosts);
-        setCustomInput(FREE_PLAN_LIMITS.maxPosts.toString());
-      }
-    }
-  };
-
-  const isPremiumFeature = (feature: 'mode' | 'count', value: CollectionMode | number | 'all'): boolean => {
-    if (userPlan === 'premium') return false;
-    
-    if (feature === 'mode') {
-      return !FREE_PLAN_LIMITS.allowedModes.includes(value as CollectionMode);
-    }
-    if (feature === 'count') {
-      if (value === 'all') return true;
-      return (value as number) > FREE_PLAN_LIMITS.maxPosts;
-    }
-    return false;
-  };
-
-  const getModeIcon = (mode: CollectionMode) => {
-    switch (mode) {
-      case 'lite': return <HiOutlineBolt className="mode-icon" />;
-      case 'synced': return <HiOutlineArrowsRightLeft className="mode-icon" />;
-      case 'precision': return <HiOutlineSparkles className="mode-icon" />;
+  const togglePlan = () => {
+    const newPlan: UserPlan = userPlan === 'free' ? 'premium' : 'free';
+    setUserPlan(newPlan);
+    chrome.storage.local.set({ userPlan: newPlan });
+    if (newPlan === 'free' && typeof postCount === 'number' && postCount > FREE_PLAN_LIMITS.maxPosts) {
+      setPostCount(25);
+      setCustomInput('25');
     }
   };
 
@@ -146,16 +79,15 @@ const App: React.FC = () => {
   }, [pageType]);
 
   useEffect(() => {
-    if (collectionStatus.isCollecting) {
+    if (phase === 'collecting') {
       const interval = setInterval(checkCollectionProgress, 500);
       return () => clearInterval(interval);
     }
-  }, [collectionStatus.isCollecting]);
+  }, [phase]);
 
   const checkCurrentTab = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const currentUrl = tabs[0]?.url || "";
-      
       if (currentUrl.includes("linkedin.com/feed")) {
         setPageType('main-feed');
       } else if (currentUrl.match(/linkedin\.com\/in\/[^/]+\/recent-activity/)) {
@@ -169,6 +101,8 @@ const App: React.FC = () => {
   const checkCollectionState = () => {
     chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
       if (response?.isCollecting) {
+        setPhase('collecting');
+        autoSortTriggered.current = false;
         setCollectionStatus({
           isCollecting: true,
           targetCount: response.targetCount,
@@ -180,35 +114,98 @@ const App: React.FC = () => {
 
   const checkCollectionProgress = () => {
     chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
-      if (response) {
-        setPosts([]);
-        
-        if (!response.isCollecting && collectionStatus.isCollecting) {
-          loadPosts();
-          setShowResults(true);
-        }
-        
-        setCollectionStatus({
-          isCollecting: response.isCollecting,
-          targetCount: response.targetCount,
-          currentCount: response.currentCount,
-        });
+      if (!response) return;
+      
+      setCollectionStatus({
+        isCollecting: response.isCollecting,
+        targetCount: response.targetCount,
+        currentCount: response.currentCount,
+      });
+
+      if (!response.isCollecting && phase === 'collecting' && !autoSortTriggered.current) {
+        autoSortTriggered.current = true;
+        applySort();
       }
     });
   };
 
-  const loadPosts = useCallback(() => {
-    chrome.runtime.sendMessage(
-      { type: "GET_POSTS" },
-      (response: StoredPosts) => {
-        if (response) {
-          setPosts(response.posts || []);
-        }
+  const applySort = () => {
+    setPhase('sorting');
+    
+    chrome.runtime.sendMessage({ type: "GET_POSTS" }, (response) => {
+      if (!response?.posts || response.posts.length === 0) {
+        setPhase('error');
+        setErrorMessage('No posts collected');
+        return;
       }
-    );
-  }, []);
+
+      const posts = [...response.posts];
+      let sorted;
+      switch (selectedFilter) {
+        case "likes":
+          sorted = posts.sort((a: any, b: any) => b.numLikes - a.numLikes);
+          break;
+        case "comments":
+          sorted = posts.sort((a: any, b: any) => b.numComments - a.numComments);
+          break;
+        case "shares":
+          sorted = posts.sort((a: any, b: any) => b.numShares - a.numShares);
+          break;
+        case "engagement":
+          sorted = posts.sort((a: any, b: any) => {
+            const engA = a.numLikes + a.numComments * 2 + a.numShares * 3;
+            const engB = b.numLikes + b.numComments * 2 + b.numShares * 3;
+            return engB - engA;
+          });
+          break;
+        default:
+          sorted = posts;
+      }
+
+      const sortedUrns = sorted.map((p: any) => p.activityUrn);
+      const postsData = sorted.map((p: any) => ({
+        activityUrn: p.activityUrn,
+        authorName: p.authorName,
+        text: p.text,
+        numLikes: p.numLikes,
+        numComments: p.numComments,
+        numShares: p.numShares,
+      }));
+
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(
+            tabs[0].id,
+            { type: "REORDER_FEED", sortedUrns, postsData },
+            (result) => {
+              if (result?.success) {
+                setPhase('done');
+                setSortedCount(result.reorderedCount);
+              } else {
+                setPhase('error');
+                setErrorMessage(result?.message || 'Failed to reorder feed');
+              }
+            }
+          );
+        } else {
+          setPhase('error');
+          setErrorMessage('LinkedIn tab not found');
+        }
+      });
+    });
+  };
+
+  const isCountLocked = (count: number | 'all'): boolean => {
+    if (userPlan === 'premium') return false;
+    if (count === 'all') return true;
+    return count > FREE_PLAN_LIMITS.maxPosts;
+  };
 
   const handlePresetClick = (count: number | 'all') => {
+    if (isCountLocked(count)) {
+      setShowPremiumModal(true);
+      return;
+    }
     setPostCount(count);
     if (count === 'all') {
       setCustomInput('');
@@ -220,7 +217,6 @@ const App: React.FC = () => {
   const handleCustomInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setCustomInput(value);
-    
     const numValue = parseInt(value, 10);
     if (!isNaN(numValue) && numValue > 0) {
       setPostCount(Math.min(numValue, MAX_POSTS));
@@ -228,9 +224,7 @@ const App: React.FC = () => {
   };
 
   const handleCustomInputBlur = () => {
-    // Don't process if we're in 'all' mode
     if (postCount === 'all') return;
-    
     const numValue = parseInt(customInput, 10);
     if (isNaN(numValue) || numValue < 1) {
       setPostCount(25);
@@ -245,8 +239,9 @@ const App: React.FC = () => {
   };
 
   const handleStartSorting = () => {
-    setPosts([]);
-    setShowResults(false);
+    setPhase('collecting');
+    autoSortTriggered.current = false;
+    setErrorMessage('');
 
     const targetCount = postCount;
 
@@ -260,13 +255,12 @@ const App: React.FC = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]?.id) {
         const tabId = tabs[0].id;
-        
         chrome.runtime.sendMessage({
           type: "START_COLLECTION",
           targetCount,
-          pageType: pageType,
+          pageType,
           tabId,
-          collectionMode,
+          collectionMode: 'precision',
         }, () => {
           chrome.tabs.reload(tabId);
         });
@@ -274,115 +268,47 @@ const App: React.FC = () => {
     });
   };
 
-  const handleStopCollection = () => {
+  const handleStopAndSort = () => {
     chrome.runtime.sendMessage({ type: "STOP_COLLECTION" });
-    
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]?.id) {
         chrome.tabs.sendMessage(tabs[0].id, { type: "STOP_AUTO_SCROLL" }).catch(() => {});
       }
     });
-    
     setCollectionStatus((prev) => ({ ...prev, isCollecting: false }));
-    loadPosts();
-    setShowResults(true);
+    applySort();
+  };
+
+  const handleRestoreFeed = () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: "RESTORE_FEED" }, () => {
+          setPhase('setup');
+          setSortedCount(0);
+        });
+      }
+    });
+  };
+
+  const handleBackToSetup = () => {
+    setPhase('setup');
+    setSortedCount(0);
+    setErrorMessage('');
   };
 
   const handleGoToFeed = () => {
     chrome.tabs.create({ url: "https://www.linkedin.com/feed" });
   };
 
-  const handleViewResults = () => {
-    loadPosts();
-    setShowResults(true);
-  };
-
-  const handleBackToSetup = () => {
-    setShowResults(false);
-    setFeedApplied(false);
-  };
-
-  const handleApplyToFeed = () => {
-    setIsApplyingToFeed(true);
-    
-    // Get sorted URNs and full post data
-    const sortedUrns = sortedPosts.map(post => post.activityUrn);
-    const postsData = sortedPosts.map(post => ({
-      activityUrn: post.activityUrn,
-      authorName: post.authorName,
-      text: post.text,
-      numLikes: post.numLikes,
-      numComments: post.numComments,
-      numShares: post.numShares,
-    }));
-    
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(
-          tabs[0].id,
-          { type: "REORDER_FEED", sortedUrns, postsData },
-          (response) => {
-            setIsApplyingToFeed(false);
-            if (response?.success) {
-              setFeedApplied(true);
-              console.log('[LinkedIn Analyzer] Feed reordered:', response.reorderedCount, 'posts');
-            } else {
-              console.log('[LinkedIn Analyzer] Reorder failed:', response?.message);
-              alert('Failed to reorder feed: ' + (response?.message || 'Unknown error'));
-            }
-          }
-        );
-      } else {
-        setIsApplyingToFeed(false);
-      }
-    });
-  };
-
-  const handleRestoreFeed = () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(
-          tabs[0].id,
-          { type: "RESTORE_FEED" },
-          () => {
-            setFeedApplied(false);
-          }
-        );
-      }
-    });
-  };
-
-  const sortedPosts = React.useMemo(() => {
-    const postsCopy = [...posts];
-
-    let sorted: LinkedInPost[];
-    switch (selectedFilter) {
-      case "likes":
-        sorted = postsCopy.sort((a, b) => b.numLikes - a.numLikes);
-        break;
-      case "comments":
-        sorted = postsCopy.sort((a, b) => b.numComments - a.numComments);
-        break;
-      case "shares":
-        sorted = postsCopy.sort((a, b) => b.numShares - a.numShares);
-        break;
-      case "engagement":
-        sorted = postsCopy.sort((a, b) => {
-          const engagementA = a.numLikes + a.numComments * 2 + a.numShares * 3;
-          const engagementB = b.numLikes + b.numComments * 2 + b.numShares * 3;
-          return engagementB - engagementA;
-        });
-        break;
-      default:
-        sorted = postsCopy;
+  const renderFilterIcon = (value: SortOption) => {
+    switch (value) {
+      case 'likes': return <HiOutlineHandThumbUp className="filter-icon" />;
+      case 'comments': return <HiOutlineChatBubbleLeftRight className="filter-icon" />;
+      case 'shares': return <HiOutlineArrowPath className="filter-icon" />;
+      case 'engagement': return <HiOutlineChartBar className="filter-icon" />;
+      default: return null;
     }
-
-    // If 'all' is selected, return all posts, otherwise slice to postCount
-    if (postCount === 'all') {
-      return sorted;
-    }
-    return sorted.slice(0, postCount);
-  }, [posts, selectedFilter, postCount]);
+  };
 
   const filterOptions: { value: SortOption; label: string }[] = [
     { value: "likes", label: "Likes" },
@@ -391,27 +317,67 @@ const App: React.FC = () => {
     { value: "engagement", label: "Engagement" },
   ];
 
-  const renderFilterIcon = (value: SortOption) => {
-    switch (value) {
-      case 'likes':
-        return <HiOutlineHandThumbUp className="filter-icon" />;
-      case 'comments':
-        return <HiOutlineChatBubbleLeftRight className="filter-icon" />;
-      case 'shares':
-        return <HiOutlineArrowPath className="filter-icon" />;
-      case 'engagement':
-        return <HiOutlineChartBar className="filter-icon" />;
-      default:
-        return null;
-    }
-  };
+  // Premium Modal
+  const PremiumModal = () => (
+    <div className="premium-modal-backdrop" onClick={() => setShowPremiumModal(false)}>
+      <div className="premium-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="premium-modal-close" onClick={() => setShowPremiumModal(false)}>✕</button>
+        <h2 className="premium-modal-title">Upgrade to Premium</h2>
+        <p className="premium-modal-subtitle">Unlock the full power of LinkedIn Analyzer</p>
+        
+        <div className="premium-features">
+          <div className="premium-feature">
+            <div className="premium-feature-icon-wrap">
+              <HiOutlineChartBarSquare className="premium-feature-icon" />
+            </div>
+            <div className="premium-feature-text">
+              <strong>Sort up to 2000 posts</strong>
+              <span>Free plan is limited to 25 posts</span>
+            </div>
+          </div>
+          <div className="premium-feature">
+            <div className="premium-feature-icon-wrap">
+              <HiOutlineMagnifyingGlassCircle className="premium-feature-icon" />
+            </div>
+            <div className="premium-feature-text">
+              <strong>Deep feed analysis</strong>
+              <span>Analyze large feeds with precision</span>
+            </div>
+          </div>
+          <div className="premium-feature">
+            <div className="premium-feature-icon-wrap">
+              <HiOutlineBolt className="premium-feature-icon" />
+            </div>
+            <div className="premium-feature-text">
+              <strong>Quick Panel — unlimited</strong>
+              <span>Sort 50, 100+ posts directly from feed</span>
+            </div>
+          </div>
+          <div className="premium-feature">
+            <div className="premium-feature-icon-wrap">
+              <HiOutlineRocketLaunch className="premium-feature-icon" />
+            </div>
+            <div className="premium-feature-text">
+              <strong>Priority support</strong>
+              <span>Get help faster when you need it</span>
+            </div>
+          </div>
+        </div>
+
+        <button className="premium-modal-cta" onClick={() => {
+          // TODO: link to payment page
+          setShowPremiumModal(false);
+        }}>
+          <HiOutlineStar className="premium-cta-icon" />
+          Get Premium
+        </button>
+        <p className="premium-modal-price">Starting at $4.99/month</p>
+      </div>
+    </div>
+  );
 
   if (pageType === null) {
-    return (
-      <div className="app">
-        <div className="loading">Loading...</div>
-      </div>
-    );
+    return <div className="app"><div className="loading">Loading...</div></div>;
   }
 
   if (pageType === 'other') {
@@ -432,224 +398,151 @@ const App: React.FC = () => {
             Go to LinkedIn Feed
           </button>
           <p className="landing-hint">
-            Open this extension while browsing your LinkedIn feed to start
-            analyzing posts
+            Open this extension while browsing your LinkedIn feed to start analyzing posts
           </p>
         </div>
       </div>
     );
   }
 
-  if (showResults) {
+  // Done phase
+  if (phase === 'done') {
     return (
-      <div className="app results-view">
-        <header className="results-header">
-          <button className="back-button" onClick={handleBackToSetup}>
-            ← Back
-          </button>
-          <div className="results-info">
-            <span className="results-count">{sortedPosts.length} posts</span>
+      <div className="app setup-view">
+        <header className="main-header">
+          <div className="header-left">
+            <img src="icons/icon48.png" alt="Logo" className="header-logo" />
+            <h1 className="header-title">LinkedIn Analyzer</h1>
+          </div>
+          <div className="header-right">
+            <span className={`plan-badge ${userPlan}`} onClick={togglePlan} title="Click to toggle plan (dev)">
+              {PLAN_INFO[userPlan].label}
+            </span>
           </div>
         </header>
-        <div className="results-filters">
-          {filterOptions.map((option) => (
-            <button
-              key={option.value}
-              className={`results-filter-button ${selectedFilter === option.value ? 'active' : ''}`}
-              onClick={() => setSelectedFilter(option.value)}
-            >
-              {option.value === 'likes' && <HiOutlineHandThumbUp className="filter-icon" />}
-              {option.value === 'comments' && <HiOutlineChatBubbleLeftRight className="filter-icon" />}
-              {option.value === 'shares' && <HiOutlineArrowPath className="filter-icon" />}
-              {option.value === 'engagement' && <HiOutlineChartBar className="filter-icon" />}
-              <span className="filter-label">{option.label}</span>
-            </button>
-          ))}
-        </div>
-        
-        <div className="apply-to-feed-section">
-          {!feedApplied ? (
-            <button 
-              className="apply-to-feed-button"
-              onClick={handleApplyToFeed}
-              disabled={isApplyingToFeed || sortedPosts.length === 0}
-            >
-              {isApplyingToFeed ? (
-                <>
-                  <span className="button-spinner"></span>
-                  Applying...
-                </>
-              ) : (
-                <>
-                  <HiOutlineArrowsUpDown className="button-icon" />
-                  Apply Sort to Feed
-                </>
-              )}
-            </button>
-          ) : (
-            <div className="feed-applied-controls">
-              <span className="feed-applied-badge">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M9 12l2 2 4-4"/>
-                  <circle cx="12" cy="12" r="10"/>
-                </svg>
-                Feed Sorted!
-              </span>
-              <button 
-                className="restore-feed-button"
-                onClick={handleRestoreFeed}
-              >
+        <div className="setup-content">
+          <div className="done-section">
+            <div className="done-badge">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 12l2 2 4-4"/>
+                <circle cx="12" cy="12" r="10"/>
+              </svg>
+              <span>Feed Sorted!</span>
+            </div>
+            <p className="done-info">{sortedCount} posts reordered by {selectedFilter}</p>
+            <p className="done-hint">Switch to the LinkedIn tab to see the result</p>
+            
+            <div className="done-actions">
+              <button className="restore-button" onClick={handleRestoreFeed}>
                 <HiOutlineArrowUturnLeft className="button-icon" />
-                Restore Original
+                Restore Original Feed
+              </button>
+              <button className="new-sort-button" onClick={handleBackToSetup}>
+                <HiOutlineArrowsUpDown className="button-icon" />
+                New Sort
               </button>
             </div>
-          )}
-          <p className="apply-hint">
-            {feedApplied 
-              ? "The LinkedIn feed has been reordered. Switch to the LinkedIn tab to see it."
-              : "Click to rearrange posts in your LinkedIn feed based on the selected sort order"
-            }
-          </p>
+          </div>
         </div>
-        
-        <PostList posts={sortedPosts} />
+        <footer className="app-footer">
+          <p>Having trouble? Email me at support@social-analyzer.com</p>
+        </footer>
       </div>
     );
   }
 
+  // Error phase
+  if (phase === 'error') {
+    return (
+      <div className="app setup-view">
+        <header className="main-header">
+          <div className="header-left">
+            <img src="icons/icon48.png" alt="Logo" className="header-logo" />
+            <h1 className="header-title">LinkedIn Analyzer</h1>
+          </div>
+          <div className="header-right">
+            <span className={`plan-badge ${userPlan}`} onClick={togglePlan} title="Click to toggle plan (dev)">
+              {PLAN_INFO[userPlan].label}
+            </span>
+          </div>
+        </header>
+        <div className="setup-content">
+          <div className="error-section">
+            <div className="error-icon">⚠️</div>
+            <p className="error-text">{errorMessage}</p>
+            <button className="new-sort-button" onClick={handleBackToSetup}>
+              Try Again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Setup + Collecting + Sorting
   return (
     <div className="app setup-view">
+      {showPremiumModal && <PremiumModal />}
+      
       <header className="main-header">
         <div className="header-left">
           <img src="icons/icon48.png" alt="Logo" className="header-logo" />
           <h1 className="header-title">LinkedIn Analyzer</h1>
         </div>
         <div className="header-right">
-          <div className="plan-button-wrapper">
-            <button className={`plan-button ${userPlan === 'premium' ? 'premium' : ''}`}>
-              <span className={`plan-button-icon ${userPlan === 'premium' ? 'premium' : ''}`}>
-                {userPlan === 'premium' ? 'P' : 'F'}
-              </span>
-              <span className="plan-button-text">{PLAN_INFO[userPlan].label}</span>
-            </button>
-          </div>
-          <div className="settings-container" ref={settingsRef}>
-            <button 
-              className={`settings-button ${showSettings ? 'active' : ''}`}
-              onClick={() => setShowSettings(!showSettings)}
-              aria-label="Settings"
-            >
-              <HiOutlineCog6Tooth className="settings-icon" />
-            </button>
-            {showSettings && (
-              <div className="settings-dropdown">
-                <div className="settings-section">
-                  <h3 className="settings-section-title">Collection Mode</h3>
-                  <div className="settings-options">
-                    {(Object.keys(COLLECTION_MODE_INFO) as CollectionMode[]).map((mode) => {
-                      const isLocked = isPremiumFeature('mode', mode);
-                      return (
-                        <button
-                          key={mode}
-                          className={`settings-option ${collectionMode === mode ? 'active' : ''} ${isLocked ? 'locked' : ''}`}
-                          onClick={() => handleModeChange(mode)}
-                          disabled={isLocked}
-                        >
-                          {getModeIcon(mode)}
-                          <div className="settings-option-text">
-                            <span className="settings-option-label">{COLLECTION_MODE_INFO[mode].label}</span>
-                            <span className="settings-option-desc">{COLLECTION_MODE_INFO[mode].description}</span>
-                          </div>
-                          {isLocked && <span className="premium-badge">Premium</span>}
-                          {!isLocked && collectionMode === mode && <span className="settings-check">✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="settings-divider" />
-                <div className="settings-section">
-                  <h3 className="settings-section-title">Plan</h3>
-                  <div className="settings-options">
-                    <button 
-                      className={`settings-option ${userPlan === 'free' ? 'active' : ''}`}
-                      onClick={() => handlePlanChange('free')}
-                    >
-                      <span className="plan-icon free">F</span>
-                      <div className="settings-option-text">
-                        <span className="settings-option-label">Free</span>
-                        <span className="settings-option-desc">25 posts • Lite mode</span>
-                      </div>
-                      {userPlan === 'free' && <span className="settings-check">✓</span>}
-                    </button>
-                    <button 
-                      className={`settings-option ${userPlan === 'premium' ? 'active' : ''}`}
-                      onClick={() => handlePlanChange('premium')}
-                    >
-                      <span className="plan-icon premium">P</span>
-                      <div className="settings-option-text">
-                        <span className="settings-option-label">Premium</span>
-                        <span className="settings-option-desc">Unlimited • All modes</span>
-                      </div>
-                      {userPlan === 'premium' && <span className="settings-check">✓</span>}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <span className={`plan-badge ${userPlan}`} onClick={togglePlan} title="Click to toggle plan (dev)">
+            {PLAN_INFO[userPlan].label}
+          </span>
         </div>
       </header>
 
       <div className="setup-content">
         <section className="setup-section">
-          <h2 className="section-title">Number of Posts to Analyze</h2>
-          
+          <h2 className="section-title">Number of Posts</h2>
           <div className="count-selector">
             <div className="preset-buttons">
               {(pageType === 'profile-feed' ? PROFILE_FEED_PRESETS : MAIN_FEED_PRESETS).map((count) => {
-                const isLocked = isPremiumFeature('count', count);
+                const locked = isCountLocked(count);
                 return (
                   <button
                     key={count}
-                    className={`preset-button ${postCount === count ? 'active' : ''} ${isLocked ? 'locked' : ''}`}
-                    onClick={() => !isLocked && handlePresetClick(count)}
-                    disabled={isLocked}
+                    className={`preset-button ${postCount === count && !locked ? 'active' : ''} ${locked ? 'locked' : ''}`}
+                    onClick={() => handlePresetClick(count)}
+                    disabled={phase !== 'setup'}
                   >
                     {count}
-                    {isLocked && <span className="lock-icon">🔒</span>}
+                    {locked && <span className="lock-icon">🔒</span>}
                   </button>
                 );
               })}
               {pageType === 'profile-feed' && (
                 <button
-                  className={`preset-button all-posts ${postCount === 'all' ? 'active' : ''} ${isPremiumFeature('count', 'all') ? 'locked' : ''}`}
-                  onClick={() => !isPremiumFeature('count', 'all') && handlePresetClick('all')}
-                  disabled={isPremiumFeature('count', 'all')}
+                  className={`preset-button all-posts ${postCount === 'all' ? 'active' : ''} ${isCountLocked('all') ? 'locked' : ''}`}
+                  onClick={() => handlePresetClick('all')}
+                  disabled={phase !== 'setup'}
                 >
                   All
-                  {isPremiumFeature('count', 'all') && <span className="lock-icon">🔒</span>}
+                  {isCountLocked('all') && <span className="lock-icon">🔒</span>}
                 </button>
               )}
             </div>
-            
-            <div className="custom-input-wrapper">
-              <label className="custom-label">Custom:</label>
-              <input
-                type="number"
-                className="custom-input"
-                value={customInput}
-                onChange={handleCustomInputChange}
-                onBlur={handleCustomInputBlur}
-                min={1}
-                max={userPlan === 'premium' ? MAX_POSTS : FREE_PLAN_LIMITS.maxPosts}
-                placeholder={postCount === 'all' ? 'All' : ''}
-                disabled={postCount === 'all' || userPlan === 'free'}
-              />
-              <span className="max-hint">
-                {userPlan === 'premium' ? `Max: ${MAX_POSTS}` : `Max: ${FREE_PLAN_LIMITS.maxPosts} (Free)`}
-              </span>
-            </div>
+            {userPlan === 'premium' && (
+              <div className="custom-input-wrapper">
+                <label className="custom-label">Custom:</label>
+                <input
+                  type="number"
+                  className="custom-input"
+                  value={customInput}
+                  onChange={handleCustomInputChange}
+                  onBlur={handleCustomInputBlur}
+                  min={1}
+                  max={MAX_POSTS}
+                  placeholder={postCount === 'all' ? 'All' : ''}
+                  disabled={postCount === 'all' || phase !== 'setup'}
+                />
+                <span className="max-hint">Max: {MAX_POSTS}</span>
+              </div>
+            )}
           </div>
         </section>
 
@@ -661,6 +554,7 @@ const App: React.FC = () => {
                 key={option.value}
                 className={`filter-button ${selectedFilter === option.value ? 'active' : ''}`}
                 onClick={() => setSelectedFilter(option.value)}
+                disabled={phase !== 'setup'}
               >
                 {renderFilterIcon(option.value)}
                 <span className="filter-label">{option.label}</span>
@@ -669,7 +563,14 @@ const App: React.FC = () => {
           </div>
         </section>
 
-        {collectionStatus.isCollecting ? (
+        {phase === 'setup' && (
+          <button className="start-button" onClick={handleStartSorting}>
+            <HiOutlineArrowsUpDown className="button-icon-inline" />
+            START SORTING
+          </button>
+        )}
+
+        {phase === 'collecting' && (
           <div className="collection-progress">
             <div className="progress-info">
               <span className="progress-text">
@@ -694,24 +595,32 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
-            <button className="stop-button" onClick={handleStopCollection}>
-              STOP & VIEW RESULTS
+            <button className="stop-button" onClick={handleStopAndSort}>
+              STOP & SORT NOW
             </button>
           </div>
-        ) : (
-          <>
-            <button className="start-button" onClick={handleStartSorting}>
-              START SORTING
-            </button>
-            
-            {posts.length > 0 && (
-              <button className="view-results-button" onClick={handleViewResults}>
-                VIEW PREVIOUS RESULTS ({posts.length} posts)
-              </button>
-            )}
-          </>
+        )}
+
+        {phase === 'sorting' && (
+          <div className="sorting-progress">
+            <div className="sorting-spinner"></div>
+            <span className="sorting-text">Sorting and applying to feed...</span>
+          </div>
         )}
       </div>
+
+      {userPlan === 'free' && (
+        <div className="premium-promo">
+          <p className="premium-promo-text">Pro removes limits across sorting, exports & more</p>
+          <button className="premium-promo-button" onClick={() => setShowPremiumModal(true)}>
+            <HiOutlineStar className="premium-promo-icon" />
+            Get Pro
+          </button>
+          <p className="premium-promo-activate">
+            Already bought Pro? <span className="premium-promo-link" onClick={() => { /* TODO: activate flow */ }}>Activate here →</span>
+          </p>
+        </div>
+      )}
 
       <footer className="app-footer">
         <p>Having trouble? Email me at support@social-analyzer.com</p>
