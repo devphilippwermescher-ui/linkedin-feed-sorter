@@ -1,5 +1,14 @@
 type CollectionMode = 'lite' | 'synced' | 'precision';
 
+interface PostData {
+  activityUrn: string;
+  authorName: string;
+  text?: string;
+  numLikes: number;
+  numComments: number;
+  numShares: number;
+}
+
 let isAutoScrolling = false;
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
 let checkInterval: ReturnType<typeof setInterval> | null = null;
@@ -7,6 +16,11 @@ let lastScrollHeight = 0;
 let noChangeCount = 0;
 let overlayElement: HTMLDivElement | null = null;
 let currentCollectionMode: CollectionMode = 'precision';
+
+// Cache for DOM elements by URN for reordering
+const domElementsCache = new Map<string, Element>();
+let originalFeedOrder: string[] = [];
+let isReordered = false;
 
 const SCROLL_DELAY = 3000;
 const MAX_NO_CHANGE = 4;
@@ -19,6 +33,641 @@ let noNewPostsCount = 0;
 let buttonAttempts = 0;
 
 console.log('[LinkedIn Analyzer] Content script loaded');
+
+// Cache all visible post elements for later reordering
+function cachePostElements(): void {
+  const postElements = document.querySelectorAll('[data-id^="urn:li:activity:"], [data-urn^="urn:li:activity:"]');
+  
+  postElements.forEach((el) => {
+    const urn = el.getAttribute('data-id') || el.getAttribute('data-urn');
+    const activityMatch = urn?.match(/urn:li:activity:(\d+)/);
+    if (activityMatch) {
+      const normalizedUrn = `urn:li:activity:${activityMatch[1]}`;
+      if (!domElementsCache.has(normalizedUrn)) {
+        domElementsCache.set(normalizedUrn, el);
+        originalFeedOrder.push(normalizedUrn);
+      }
+    }
+  });
+  
+  console.log('[LinkedIn Analyzer] Cached', domElementsCache.size, 'post elements');
+}
+
+// Get the feed container element
+function getFeedContainer(): Element | null {
+  // Try main feed container first
+  const selectors = [
+    '.scaffold-finite-scroll__content[data-finite-scroll-hotkey-context="FEED"]',
+    '.scaffold-finite-scroll__content',
+    '.core-rail .scaffold-finite-scroll__content',
+  ];
+  
+  for (const selector of selectors) {
+    const container = document.querySelector(selector);
+    if (container) return container;
+  }
+  
+  return null;
+}
+
+// Full-screen reorder overlay
+function showReorderOverlay(stage: string, progress: string, detail?: string): void {
+  let overlay = document.getElementById('linkedin-analyzer-reorder-overlay');
+  
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'linkedin-analyzer-reorder-overlay';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 999999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      backdrop-filter: blur(4px);
+    `;
+    
+    const style = document.createElement('style');
+    style.id = 'linkedin-analyzer-reorder-styles';
+    style.textContent = `
+      @keyframes la-reorder-spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes la-reorder-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(overlay);
+  }
+  
+  overlay.innerHTML = `
+    <div style="
+      background: white;
+      padding: 40px 60px;
+      border-radius: 20px;
+      text-align: center;
+      box-shadow: 0 25px 80px rgba(0, 0, 0, 0.4);
+      max-width: 400px;
+    ">
+      <div style="
+        width: 60px;
+        height: 60px;
+        border: 4px solid #e5e7eb;
+        border-top-color: #034C9D;
+        border-radius: 50%;
+        margin: 0 auto 24px;
+        animation: la-reorder-spin 1s linear infinite;
+      "></div>
+      <div style="
+        font-size: 14px;
+        font-weight: 600;
+        color: #034C9D;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+      ">${stage}</div>
+      <div id="la-reorder-progress" style="
+        font-size: 28px;
+        font-weight: 700;
+        color: #1a1a1a;
+        margin-bottom: 8px;
+      ">${progress}</div>
+      ${detail ? `<div id="la-reorder-detail" style="
+        font-size: 13px;
+        color: #6b7280;
+        animation: la-reorder-pulse 2s ease-in-out infinite;
+      ">${detail}</div>` : ''}
+    </div>
+  `;
+}
+
+function updateReorderOverlay(stage?: string, progress?: string, detail?: string): void {
+  const overlay = document.getElementById('linkedin-analyzer-reorder-overlay');
+  if (!overlay) return;
+  
+  if (stage) {
+    const stageEl = overlay.querySelector('div > div:nth-child(2)');
+    if (stageEl) stageEl.textContent = stage;
+  }
+  if (progress) {
+    const progressEl = overlay.querySelector('#la-reorder-progress');
+    if (progressEl) progressEl.textContent = progress;
+  }
+  if (detail !== undefined) {
+    const detailEl = overlay.querySelector('#la-reorder-detail');
+    if (detailEl) detailEl.textContent = detail;
+  }
+}
+
+function hideReorderOverlay(): void {
+  const overlay = document.getElementById('linkedin-analyzer-reorder-overlay');
+  const style = document.getElementById('linkedin-analyzer-reorder-styles');
+  if (overlay) overlay.remove();
+  if (style) style.remove();
+}
+
+// Create a post card for posts not found in DOM
+function createPostCard(post: PostData, index: number): Element {
+  const activityId = post.activityUrn.replace('urn:li:activity:', '');
+  const postUrl = `https://www.linkedin.com/feed/update/urn:li:activity:${activityId}/`;
+  
+  // Truncate text if too long
+  const displayText = post.text 
+    ? (post.text.length > 300 ? post.text.substring(0, 300) + '...' : post.text)
+    : '';
+  
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = `
+    <div data-id="urn:li:activity:${activityId}" class="relative" data-finite-scroll-hotkey-item="${index}">
+      <div class="full-height" data-view-name="feed-full-update">
+        <div class="full-height">
+          <div class="feed-shared-update-v2 feed-shared-update-v2--minimal-padding full-height relative artdeco-card" 
+               role="article" 
+               data-urn="urn:li:activity:${activityId}"
+               style="margin-bottom: 8px;">
+            <div style="padding: 12px 16px;">
+              <!-- Header -->
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+                <div style="
+                  width: 48px; 
+                  height: 48px; 
+                  background: linear-gradient(135deg, #034C9D 0%, #0066CC 100%);
+                  border-radius: 50%;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  color: white;
+                  font-weight: 700;
+                  font-size: 18px;
+                ">${post.authorName.charAt(0).toUpperCase()}</div>
+                <div style="flex: 1;">
+                  <a href="${postUrl}" target="_blank" style="
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: rgba(0,0,0,0.9);
+                    text-decoration: none;
+                  ">${post.authorName}</a>
+                  <div style="
+                    font-size: 12px;
+                    color: rgba(0,0,0,0.6);
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                  ">
+                    <span style="
+                      background: #f0f7ff;
+                      color: #034C9D;
+                      padding: 2px 8px;
+                      border-radius: 10px;
+                      font-size: 10px;
+                      font-weight: 600;
+                    ">From Analyzer</span>
+                  </div>
+                </div>
+                <a href="${postUrl}" target="_blank" style="
+                  padding: 6px 12px;
+                  background: #034C9D;
+                  color: white;
+                  border-radius: 16px;
+                  font-size: 12px;
+                  font-weight: 600;
+                  text-decoration: none;
+                ">Open Post</a>
+              </div>
+              
+              <!-- Content -->
+              ${displayText ? `
+              <div style="
+                font-size: 14px;
+                color: rgba(0,0,0,0.9);
+                line-height: 1.5;
+                margin-bottom: 12px;
+                white-space: pre-wrap;
+              ">${displayText}</div>
+              ` : ''}
+              
+              <!-- Stats -->
+              <div style="
+                display: flex;
+                gap: 16px;
+                padding-top: 12px;
+                border-top: 1px solid #e5e7eb;
+                font-size: 12px;
+                color: rgba(0,0,0,0.6);
+              ">
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+                  </svg>
+                  <span style="font-weight: 600; color: #034C9D;">${post.numLikes.toLocaleString()}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <span style="font-weight: 600; color: #034C9D;">${post.numComments.toLocaleString()}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                    <path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+                  </svg>
+                  <span style="font-weight: 600; color: #034C9D;">${post.numShares.toLocaleString()}</span>
+                </div>
+                <div style="margin-left: auto; display: flex; align-items: center; gap: 4px;">
+                  <span style="
+                    background: linear-gradient(135deg, #034C9D 0%, #0066CC 100%);
+                    color: white;
+                    padding: 4px 10px;
+                    border-radius: 12px;
+                    font-size: 11px;
+                    font-weight: 600;
+                  ">Engagement: ${(post.numLikes + post.numComments * 2 + post.numShares * 3).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  return wrapper.firstElementChild!;
+}
+
+// Count posts currently in DOM
+function countPostsInDOM(targetUrns: string[]): { found: Set<string>; missing: string[] } {
+  const targetUrnSet = new Set(targetUrns);
+  const found = new Set<string>();
+  
+  document.querySelectorAll('[data-id^="urn:li:activity:"], [data-urn^="urn:li:activity:"]').forEach((el) => {
+    const urn = el.getAttribute('data-id') || el.getAttribute('data-urn');
+    const match = urn?.match(/urn:li:activity:(\d+)/);
+    if (match) {
+      const normalizedUrn = `urn:li:activity:${match[1]}`;
+      if (targetUrnSet.has(normalizedUrn)) {
+        found.add(normalizedUrn);
+      }
+    }
+  });
+  
+  const missing = targetUrns.filter(urn => !found.has(urn));
+  return { found, missing };
+}
+
+// Ensure all posts are loaded in DOM by scrolling
+async function ensurePostsLoadedInDOM(targetUrns: string[]): Promise<{ loaded: number; total: number }> {
+  console.log('[LinkedIn Analyzer] Ensuring', targetUrns.length, 'posts are loaded in DOM');
+  
+  // Initial check
+  let { found, missing } = countPostsInDOM(targetUrns);
+  
+  showReorderOverlay(
+    'Step 1: Loading Posts',
+    `${found.size} / ${targetUrns.length}`,
+    `Checking for ${missing.length} missing posts...`
+  );
+  
+  // If all found, we're done
+  if (missing.length === 0) {
+    console.log('[LinkedIn Analyzer] All posts already in DOM');
+    return { loaded: found.size, total: targetUrns.length };
+  }
+  
+  let lastFoundCount = found.size;
+  let noChangeAttempts = 0;
+  const maxScrollAttempts = 20;
+  const scrollStep = 2000;
+  
+  // Scroll down to load missing posts
+  for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
+    // Scroll down
+    const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    const currentScroll = window.scrollY || 0;
+    const nextScroll = Math.min(currentScroll + scrollStep, maxScroll);
+    
+    window.scrollTo({ top: nextScroll, behavior: 'auto' });
+    
+    // Wait for content to load
+    await new Promise(resolve => setTimeout(resolve, 600));
+    
+    // Recheck posts
+    const result = countPostsInDOM(targetUrns);
+    found = result.found;
+    missing = result.missing;
+    
+    updateReorderOverlay(
+      undefined,
+      `${found.size} / ${targetUrns.length}`,
+      missing.length > 0 ? `Scrolling to find ${missing.length} more posts...` : 'All posts found!'
+    );
+    
+    console.log('[LinkedIn Analyzer] Scroll attempt', attempt + 1, '- Found:', found.size, 'Missing:', missing.length);
+    
+    // All found
+    if (missing.length === 0) {
+      console.log('[LinkedIn Analyzer] All posts loaded');
+      break;
+    }
+    
+    // No progress check
+    if (found.size === lastFoundCount) {
+      noChangeAttempts++;
+      if (noChangeAttempts >= 4) {
+        // Try clicking load more button
+        updateReorderOverlay(undefined, undefined, 'Trying to load more posts...');
+        const clicked = clickLoadMoreButton();
+        if (clicked) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          noChangeAttempts = 0;
+        } else {
+          // Reached end of feed
+          console.log('[LinkedIn Analyzer] Cannot load more posts, proceeding with', found.size);
+          break;
+        }
+      }
+    } else {
+      noChangeAttempts = 0;
+      lastFoundCount = found.size;
+    }
+    
+    // If we're at the bottom
+    if (nextScroll >= maxScroll - 100) {
+      // Try to load more
+      const clicked = clickLoadMoreButton();
+      if (clicked) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } else if (noChangeAttempts >= 2) {
+        break;
+      }
+    }
+  }
+  
+  // Final count
+  const finalResult = countPostsInDOM(targetUrns);
+  return { loaded: finalResult.found.size, total: targetUrns.length };
+}
+
+// Reorder feed posts based on sorted URN list
+async function reorderFeedPosts(sortedUrns: string[], postsData: PostData[] = []): Promise<{ success: boolean; reorderedCount: number; message: string }> {
+  console.log('[LinkedIn Analyzer] Reordering feed with', sortedUrns.length, 'posts,', postsData.length, 'with data');
+  
+  // Create a map of post data for quick lookup
+  const postsDataMap = new Map<string, PostData>();
+  postsData.forEach(p => postsDataMap.set(p.activityUrn, p));
+  
+  try {
+    // Step 1: Load all posts into DOM
+    const loadResult = await ensurePostsLoadedInDOM(sortedUrns);
+    console.log('[LinkedIn Analyzer] Loaded', loadResult.loaded, '/', loadResult.total, 'posts in DOM');
+    
+    // Step 2: Preparing to reorder
+    updateReorderOverlay(
+      'Step 2: Preparing',
+      'Organizing posts...',
+      'Scrolling back to top'
+    );
+    
+    // Scroll back to top before reordering
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Cache all current post elements
+    cachePostElements();
+    
+    const feedContainer = getFeedContainer();
+    if (!feedContainer) {
+      hideReorderOverlay();
+      console.log('[LinkedIn Analyzer] Feed container not found');
+      return { success: false, reorderedCount: 0, message: 'Feed container not found' };
+    }
+    
+    // Step 3: Reordering
+    updateReorderOverlay(
+      'Step 3: Reordering',
+      `${sortedUrns.length} posts`,
+      'Applying your sort order...'
+    );
+    
+    // Find all direct children that are post containers
+    // LinkedIn structure: feedContainer > div (wrapper) > div[data-id] (post)
+    const allChildren = Array.from(feedContainer.children);
+    const postContainers: Map<string, Element> = new Map();
+    const otherElements: Element[] = [];
+    
+    allChildren.forEach((child) => {
+      // Check if this child contains a post
+      const postElement = child.querySelector('[data-id^="urn:li:activity:"], [data-urn^="urn:li:activity:"]') ||
+                         (child.getAttribute('data-id')?.includes('activity:') ? child : null);
+      
+      if (postElement) {
+        const urn = postElement.getAttribute('data-id') || postElement.getAttribute('data-urn');
+        const activityMatch = urn?.match(/urn:li:activity:(\d+)/);
+        if (activityMatch) {
+          const normalizedUrn = `urn:li:activity:${activityMatch[1]}`;
+          
+          // Check if this is a real post with content, not just an occludable placeholder
+          const hasContent = child.querySelector('.feed-shared-update-v2, .update-components-actor, .feed-shared-text');
+          const isOccludableHint = child.querySelector('.occludable-update-hint');
+          const isEmpty = isOccludableHint && !hasContent;
+          
+          if (!isEmpty) {
+            // Store the wrapper div (direct child of feed container)
+            postContainers.set(normalizedUrn, child);
+          } else {
+            console.log('[LinkedIn Analyzer] Skipping empty placeholder:', normalizedUrn);
+          }
+        }
+      } else {
+        // Keep skip links and other non-post elements, but exclude empty post placeholders
+        const hasEmptyPlaceholder = child.querySelector('.occludable-update-hint:empty') ||
+          (child.querySelector('.occludable-update') && !child.querySelector('.feed-shared-update-v2'));
+        
+        if (!child.classList.contains('feed-skip-link__container') && !hasEmptyPlaceholder) {
+          otherElements.push(child);
+        }
+      }
+    });
+    
+    console.log('[LinkedIn Analyzer] Found', postContainers.size, 'post containers,', otherElements.length, 'other elements');
+    
+    if (postContainers.size === 0) {
+      hideReorderOverlay();
+      return { success: false, reorderedCount: 0, message: 'No posts found in feed' };
+    }
+    
+    // Create a document fragment to build the new order
+    const fragment = document.createDocumentFragment();
+    let reorderedCount = 0;
+    const processedUrns = new Set<string>();
+    
+    // First, add posts in the sorted order
+    let createdCount = 0;
+    for (const urn of sortedUrns) {
+      const container = postContainers.get(urn);
+      
+      // Check if container has real content (not just an empty placeholder)
+      const hasRealContent = container && (
+        container.querySelector('.feed-shared-update-v2__description') ||
+        container.querySelector('.update-components-actor') ||
+        container.querySelector('.feed-shared-text') ||
+        container.querySelector('.update-components-text')
+      );
+      
+      if (container && hasRealContent && !processedUrns.has(urn)) {
+        // Clone the entire container with all its content
+        const clone = container.cloneNode(true) as Element;
+        // Update the hotkey item index for accessibility
+        const hotkeyEl = clone.querySelector('[data-finite-scroll-hotkey-item]');
+        if (hotkeyEl) {
+          hotkeyEl.setAttribute('data-finite-scroll-hotkey-item', reorderedCount.toString());
+        }
+        fragment.appendChild(clone);
+        reorderedCount++;
+        processedUrns.add(urn);
+      } else if (postsDataMap.has(urn) && !processedUrns.has(urn)) {
+        // Post not in DOM (or is empty placeholder) but we have data - create a card
+        const postData = postsDataMap.get(urn)!;
+        console.log('[LinkedIn Analyzer] Creating card for missing/empty post:', postData.authorName);
+        const card = createPostCard(postData, reorderedCount);
+        fragment.appendChild(card);
+        reorderedCount++;
+        createdCount++;
+        processedUrns.add(urn);
+      }
+    }
+    
+    if (createdCount > 0) {
+      console.log('[LinkedIn Analyzer] Created', createdCount, 'cards for missing posts');
+    }
+    
+    // Add any remaining posts that weren't in the sorted list (e.g., ads, special content)
+    postContainers.forEach((container, urn) => {
+      if (!processedUrns.has(urn)) {
+        // Skip empty placeholders
+        const hasRealContent = container.querySelector('.feed-shared-update-v2__description') ||
+          container.querySelector('.update-components-actor') ||
+          container.querySelector('.feed-shared-text') ||
+          container.querySelector('.update-components-text');
+        
+        if (hasRealContent) {
+          const clone = container.cloneNode(true) as Element;
+          const hotkeyEl = clone.querySelector('[data-finite-scroll-hotkey-item]');
+          if (hotkeyEl) {
+            hotkeyEl.setAttribute('data-finite-scroll-hotkey-item', reorderedCount.toString());
+          }
+          fragment.appendChild(clone);
+          reorderedCount++;
+        }
+      }
+    });
+    
+    // Clear the feed container
+    while (feedContainer.firstChild) {
+      feedContainer.removeChild(feedContainer.firstChild);
+    }
+    
+    // Append all reordered posts
+    feedContainer.appendChild(fragment);
+    
+    // Re-add other elements at the end
+    otherElements.forEach((el) => {
+      feedContainer.appendChild(el.cloneNode(true));
+    });
+  
+    isReordered = true;
+    
+    // Hide reorder overlay
+    hideReorderOverlay();
+    
+    // Small delay before scrolling to top
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    // Scroll to top to show reordered content
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    
+    console.log('[LinkedIn Analyzer] Feed reordered,', reorderedCount, 'posts placed');
+    
+    // Show success notification
+    showReorderNotification(reorderedCount);
+    
+    return { success: true, reorderedCount, message: `Successfully reordered ${reorderedCount} posts` };
+    
+  } catch (error) {
+    hideReorderOverlay();
+    console.log('[LinkedIn Analyzer] Reorder error:', error);
+    return { success: false, reorderedCount: 0, message: (error as Error).message || 'Unknown error' };
+  }
+}
+
+// Show notification after reordering
+function showReorderNotification(count: number): void {
+  const notification = document.createElement('div');
+  notification.id = 'linkedin-analyzer-notification';
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #034C9D 0%, #0066CC 100%);
+    color: white;
+    padding: 16px 32px;
+    border-radius: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    box-shadow: 0 8px 30px rgba(3, 76, 157, 0.4);
+    z-index: 999999;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideDown 0.3s ease;
+  `;
+  
+  notification.innerHTML = `
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M9 12l2 2 4-4"/>
+      <circle cx="12" cy="12" r="10"/>
+    </svg>
+    <span>Feed reordered: ${count} posts sorted by engagement</span>
+  `;
+  
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+  `;
+  
+  document.head.appendChild(style);
+  document.body.appendChild(notification);
+  
+  // Remove after 4 seconds
+  setTimeout(() => {
+    notification.style.animation = 'slideDown 0.3s ease reverse';
+    setTimeout(() => notification.remove(), 300);
+  }, 4000);
+}
+
+// Restore original feed order
+function restoreOriginalOrder(): { success: boolean; message: string } {
+  if (!isReordered) {
+    return { success: false, message: 'Feed is not reordered' };
+  }
+  
+  // Simply reload the page to restore original order
+  window.location.reload();
+  return { success: true, message: 'Restoring original order...' };
+}
 
 function parsePostElement(postEl: Element): any | null {
   try {
@@ -205,39 +854,64 @@ function syncPostsWithDOM(): void {
   }
 }
 
-function collectPostsFromDOM(): void {
-  const postElements = document.querySelectorAll('[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"]');
-  const posts: any[] = [];
-  
-  postElements.forEach((postEl) => {
-    const post = parsePostElement(postEl);
-    if (post) {
-      posts.push(post);
+function collectPostsFromDOM(): Promise<number> {
+  return new Promise((resolve) => {
+    const postElements = document.querySelectorAll('[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"]');
+    const posts: any[] = [];
+    
+    postElements.forEach((postEl) => {
+      const post = parsePostElement(postEl);
+      if (post) {
+        posts.push(post);
+      }
+    });
+    
+    if (posts.length > 0) {
+      console.log('[LinkedIn Analyzer] Collected', posts.length, 'posts from DOM');
+      chrome.runtime.sendMessage({
+        type: "DOM_POSTS",
+        posts: posts,
+      }, () => {
+        // Get updated count from background
+        chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (state) => {
+          resolve(state?.currentCount || posts.length);
+        });
+      });
+    } else {
+      resolve(0);
     }
   });
-  
-  if (posts.length > 0) {
-    console.log('[LinkedIn Analyzer] Collected', posts.length, 'posts from DOM (fallback)');
-    chrome.runtime.sendMessage({
-      type: "DOM_POSTS",
-      posts: posts,
-    });
-  }
 }
 
 function initializeAfterLoad() {
-  console.log('[LinkedIn Analyzer] Page ready, checking collection state...');
-  
-  chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
-    console.log('[LinkedIn Analyzer] Initial state:', response);
-    const hasValidTarget = response?.targetCount === 'all' || (response?.targetCount > 0);
-    if (response?.isCollecting && hasValidTarget) {
-      console.log('[LinkedIn Analyzer] Active collection found, resuming...');
-      showOverlay(response.currentCount, response.targetCount);
-      setTimeout(() => {
-        startAutoScroll();
-      }, 2000);
+  // First check for pending Quick Panel action
+  chrome.storage.local.get(['qp_pending'], (result) => {
+    const pending = result.qp_pending;
+    
+    if (pending && pending.sortType && pending.count && (Date.now() - pending.ts < 30000)) {
+      // Quick Panel action pending - DON'T do anything else
+      // qp_checkPending() will handle everything
+      console.log('[LinkedIn Analyzer] QP pending, skipping normal init');
+      return;
     }
+    
+    // No Quick Panel pending - check for active collection from popup
+    console.log('[LinkedIn Analyzer] Page ready, checking collection state...');
+    
+    chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
+      // Double-check QP isn't active now
+      if (qp_isActive) return;
+      
+      console.log('[LinkedIn Analyzer] Initial state:', response);
+      const hasValidTarget = response?.targetCount === 'all' || (response?.targetCount > 0);
+      if (response?.isCollecting && hasValidTarget) {
+        console.log('[LinkedIn Analyzer] Active collection found, resuming...');
+        showOverlay(response.currentCount, response.targetCount);
+        setTimeout(() => {
+          startAutoScroll();
+        }, 2000);
+      }
+    });
   });
 }
 
@@ -279,6 +953,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "STOP_AUTO_SCROLL") {
     stopAutoScroll();
     sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === "REORDER_FEED") {
+    // Handle async reorder with full post data
+    const postsData: PostData[] = message.postsData || [];
+    const sortedUrns: string[] = message.sortedUrns || postsData.map(p => p.activityUrn);
+    
+    reorderFeedPosts(sortedUrns, postsData).then((result) => {
+      sendResponse(result);
+    }).catch((error) => {
+      console.log('[LinkedIn Analyzer] Reorder error:', error);
+      sendResponse({ success: false, reorderedCount: 0, message: error.message });
+    });
+    return true; // Keep message channel open for async response
+  }
+
+  if (message.type === "RESTORE_FEED") {
+    const result = restoreOriginalOrder();
+    sendResponse(result);
+    return true;
+  }
+
+  if (message.type === "CACHE_POSTS") {
+    cachePostElements();
+    sendResponse({ success: true, cachedCount: domElementsCache.size });
     return true;
   }
 
@@ -634,3 +1334,759 @@ function stopAutoScroll() {
   }
   hideOverlay();
 }
+
+// Inject sort controls into LinkedIn feed page
+function injectSortControls(): void {
+  // Check if already injected
+  if (document.getElementById('linkedin-analyzer-sort-controls')) {
+    return;
+  }
+  
+  // Find the feed sort toggle wrapper
+  const feedToggleWrapper = document.querySelector('.feed-sort-toggle-dsa__wrapper');
+  if (!feedToggleWrapper) {
+    console.log('[LinkedIn Analyzer] Feed toggle wrapper not found, retrying...');
+    setTimeout(injectSortControls, 2000);
+    return;
+  }
+  
+  // Create our sort controls container
+  const sortControls = document.createElement('div');
+  sortControls.id = 'linkedin-analyzer-sort-controls';
+  sortControls.innerHTML = `
+    <style>
+      #linkedin-analyzer-sort-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 16px;
+        margin: 8px 0;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      
+      .la-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      
+      .la-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .la-icon {
+        width: 20px;
+        height: 20px;
+        color: #0077B5;
+      }
+      
+      .la-title-text {
+        font-size: 13px;
+        font-weight: 600;
+        color: #0077B5;
+      }
+      
+      .la-count-selector {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      
+      .la-count-label {
+        font-size: 11px;
+        color: #9ca3af;
+      }
+      
+      .la-count-btn {
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        background: white;
+        color: #6b7280;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      
+      .la-count-btn:hover {
+        border-color: #0077B5;
+        color: #0077B5;
+      }
+      
+      .la-count-btn.active {
+        background: #0077B5;
+        color: white;
+        border-color: #0077B5;
+      }
+      
+      .la-sort-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      
+      .la-sort-btn {
+        flex: 1;
+        padding: 10px 8px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        background: white;
+        color: #374151;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+      }
+      
+      .la-sort-btn:hover {
+        background: #f0f9ff;
+        border-color: #0077B5;
+        color: #0077B5;
+      }
+      
+      .la-sort-btn.active {
+        background: linear-gradient(135deg, #0077B5 0%, #00A0DC 100%);
+        color: white;
+        border-color: transparent;
+        box-shadow: 0 2px 8px rgba(0, 119, 181, 0.25);
+      }
+      
+      .la-sort-btn.loading {
+        opacity: 0.7;
+        pointer-events: none;
+        animation: la-loading 1.5s ease-in-out infinite;
+      }
+      
+      @keyframes la-loading {
+        0%, 100% { opacity: 0.7; }
+        50% { opacity: 0.4; }
+      }
+      
+      .la-sort-btn svg {
+        width: 18px;
+        height: 18px;
+      }
+      
+      .la-sort-btn span {
+        font-size: 11px;
+      }
+      
+      .la-restore-btn {
+        padding: 8px 16px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid #fee2e2;
+        border-radius: 8px;
+        background: #fef2f2;
+        color: #dc2626;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+      
+      .la-restore-btn:hover {
+        background: #fee2e2;
+        border-color: #fecaca;
+      }
+      
+      .la-restore-btn svg {
+        width: 14px;
+        height: 14px;
+      }
+      
+      .la-status {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px;
+        background: #f0f9ff;
+        border-radius: 6px;
+        font-size: 12px;
+        color: #0077B5;
+      }
+      
+      .la-status.visible {
+        display: flex;
+      }
+      
+      .la-spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid #e0f2fe;
+        border-top-color: #0077B5;
+        border-radius: 50%;
+        animation: la-spin 0.8s linear infinite;
+      }
+      
+      @keyframes la-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+    
+    <div class="la-header">
+      <div class="la-title">
+        <svg class="la-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+        </svg>
+        <span class="la-title-text">Quick Panel</span>
+      </div>
+      
+      <div class="la-count-selector">
+        <span class="la-count-label">Posts:</span>
+        <button class="la-count-btn active" data-count="25">25</button>
+        <button class="la-count-btn" data-count="50">50</button>
+        <button class="la-count-btn" data-count="100">100</button>
+      </div>
+    </div>
+    
+    <div class="la-sort-row">
+      <button class="la-sort-btn" data-sort="likes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+        </svg>
+        <span>Likes</span>
+      </button>
+      <button class="la-sort-btn" data-sort="comments">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span>Comments</span>
+      </button>
+      <button class="la-sort-btn" data-sort="shares">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+          <path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+        </svg>
+        <span>Shares</span>
+      </button>
+      <button class="la-sort-btn" data-sort="engagement">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+        </svg>
+        <span>Best</span>
+      </button>
+    </div>
+    
+    <div class="la-status" id="la-status">
+      <div class="la-spinner"></div>
+      <span id="la-status-text">Collecting posts...</span>
+    </div>
+    
+    <button class="la-restore-btn" id="la-restore-btn" style="display: none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+      </svg>
+      Restore Original Feed
+    </button>
+  `;
+  
+  // Insert after the feed toggle
+  feedToggleWrapper.parentNode?.insertBefore(sortControls, feedToggleWrapper.nextSibling);
+  
+  // Add event listeners
+  setupSortControlsListeners();
+  
+  console.log('[LinkedIn Analyzer] Quick Panel injected');
+}
+
+// Quick Panel state
+let qp_selectedCount = 25;
+let qp_isActive = false;
+let qp_sortType: string | null = null;
+let qp_targetCount = 25;
+let qp_posts: Map<string, any> = new Map();
+let qp_isScrolling = false;
+let qp_scrollTimeout: ReturnType<typeof setTimeout> | null = null;
+let qp_checkInterval: ReturnType<typeof setInterval> | null = null;
+let qp_lastScrollHeight = 0;
+let qp_noChangeCount = 0;
+let qp_noNewPostsCount = 0;
+let qp_lastPostCount = 0;
+
+const QP_SCROLL_DELAY = 1200;
+const QP_CHECK_INTERVAL = 1500;
+const QP_MAX_NO_CHANGE = 4;
+const QP_MAX_NO_NEW_POSTS = 6;
+
+function setupSortControlsListeners(): void {
+  const sortButtons = document.querySelectorAll('.la-sort-btn');
+  const countButtons = document.querySelectorAll('.la-count-btn');
+  const restoreBtn = document.getElementById('la-restore-btn');
+  
+  countButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (qp_isActive) return;
+      countButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      qp_selectedCount = parseInt(btn.getAttribute('data-count') || '25', 10);
+    });
+  });
+  
+  sortButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sortType = btn.getAttribute('data-sort');
+      if (!sortType || qp_isActive) return;
+      
+      chrome.storage.local.set({
+        qp_pending: { sortType, count: qp_selectedCount, ts: Date.now() }
+      }, () => {
+        window.location.reload();
+      });
+    });
+  });
+  
+  if (restoreBtn) {
+    restoreBtn.addEventListener('click', () => location.reload());
+  }
+}
+
+function qp_checkPending(): void {
+  chrome.storage.local.get(['qp_pending'], (result) => {
+    const p = result.qp_pending;
+    if (!p || !p.sortType || !p.count || (Date.now() - p.ts > 30000)) {
+      chrome.storage.local.remove(['qp_pending']);
+      return;
+    }
+    
+    console.log('[QP] Found pending:', p.sortType, p.count);
+    chrome.storage.local.remove(['qp_pending']);
+    qp_start(p.sortType, p.count);
+  });
+}
+
+function qp_start(sortType: string, targetCount: number): void {
+  if (qp_isActive || qp_isScrolling) return;
+  
+  console.log('[QP] Starting:', sortType, targetCount);
+  
+  qp_isActive = true;
+  qp_sortType = sortType;
+  qp_targetCount = targetCount;
+  qp_posts = new Map();
+  qp_isScrolling = false;
+  qp_lastScrollHeight = 0;
+  qp_noChangeCount = 0;
+  qp_noNewPostsCount = 0;
+  qp_lastPostCount = 0;
+  
+  qp_updateUI(sortType, targetCount, 'collecting');
+  qp_showOverlay(0, targetCount);
+  qp_startAutoScroll();
+}
+
+async function qp_startAutoScroll(): Promise<void> {
+  if (qp_isScrolling) return;
+  
+  console.log('[QP] Starting auto-scroll');
+  qp_isScrolling = true;
+  
+  qp_collectFromDOM();
+  qp_updateOverlay(qp_posts.size, qp_targetCount);
+  
+  qp_checkInterval = setInterval(() => {
+    if (!qp_isScrolling) {
+      if (qp_checkInterval) clearInterval(qp_checkInterval);
+      return;
+    }
+    
+    qp_collectFromDOM();
+    qp_updateOverlay(qp_posts.size, qp_targetCount);
+    qp_checkIfComplete();
+  }, QP_CHECK_INTERVAL);
+  
+  qp_doScroll();
+}
+
+function qp_doScroll(): void {
+  if (!qp_isScrolling) return;
+  
+  const scrollContainer = getScrollContainer();
+  const currentScrollHeight = scrollContainer?.scrollHeight || document.body.scrollHeight;
+  
+  console.log('[QP] Scrolling to:', currentScrollHeight);
+  
+  try {
+    if (scrollContainer) scrollContainer.scrollTop = currentScrollHeight;
+    window.scrollTo({ top: currentScrollHeight, behavior: 'auto' });
+    document.documentElement.scrollTop = currentScrollHeight;
+    document.body.scrollTop = currentScrollHeight;
+  } catch (e) {
+    console.log('[QP] Scroll error:', e);
+  }
+  
+  setTimeout(() => qp_collectFromDOM(), 800);
+  
+  if (currentScrollHeight === qp_lastScrollHeight) {
+    qp_noChangeCount++;
+    if (qp_noChangeCount >= QP_MAX_NO_CHANGE) qp_tryClickLoadMore();
+  } else {
+    qp_noChangeCount = 0;
+    qp_lastScrollHeight = currentScrollHeight;
+  }
+  
+  qp_scrollTimeout = setTimeout(() => qp_doScroll(), QP_SCROLL_DELAY);
+}
+
+function qp_checkIfComplete(): void {
+  const currentCount = qp_posts.size;
+  console.log('[QP] State:', currentCount, '/', qp_targetCount);
+  
+  if (currentCount >= qp_targetCount) {
+    console.log('[QP] Target reached!');
+    qp_stopAutoScroll();
+    qp_applySort();
+    return;
+  }
+  
+  if (currentCount === qp_lastPostCount) {
+    qp_noNewPostsCount++;
+    if (qp_noNewPostsCount >= 2 && qp_noNewPostsCount < QP_MAX_NO_NEW_POSTS) {
+      qp_tryClickLoadMore();
+    }
+    if (qp_noNewPostsCount >= QP_MAX_NO_NEW_POSTS) {
+      console.log('[QP] No more posts, sorting what we have');
+      qp_stopAutoScroll();
+      qp_applySort();
+    }
+  } else {
+    qp_noNewPostsCount = 0;
+  }
+  
+  qp_lastPostCount = currentCount;
+}
+
+function qp_tryClickLoadMore(): void {
+  const buttons = document.querySelectorAll('button');
+  
+  for (const btn of buttons) {
+    const text = btn.textContent?.toLowerCase() || '';
+    const isVisible = (btn as HTMLElement).offsetParent !== null;
+    if (!isVisible) continue;
+    
+    if (text.includes('показать') && text.includes('результат')) {
+      btn.click();
+      qp_noChangeCount = 0;
+      return;
+    }
+    if ((text.includes('show') || text.includes('see')) && text.includes('new')) {
+      btn.click();
+      qp_noChangeCount = 0;
+      return;
+    }
+    if (text.includes('weitere') || text.includes('mehr')) {
+      btn.click();
+      qp_noChangeCount = 0;
+      return;
+    }
+  }
+}
+
+function qp_collectFromDOM(): void {
+  const postElements = document.querySelectorAll('[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"]');
+  
+  postElements.forEach((postEl) => {
+    const urn = postEl.getAttribute('data-urn') || 
+                postEl.getAttribute('data-id') ||
+                postEl.closest('[data-id]')?.getAttribute('data-id');
+    
+    if (!urn || qp_posts.has(urn)) return;
+    
+    const post = parsePostElement(postEl);
+    if (post && post.activityUrn) {
+      qp_posts.set(post.activityUrn, post);
+    }
+  });
+}
+
+function qp_stopAutoScroll(): void {
+  qp_isScrolling = false;
+  if (qp_scrollTimeout) { clearTimeout(qp_scrollTimeout); qp_scrollTimeout = null; }
+  if (qp_checkInterval) { clearInterval(qp_checkInterval); qp_checkInterval = null; }
+}
+
+function qp_stop(): void {
+  qp_stopAutoScroll();
+  qp_hideOverlay();
+  qp_isActive = false;
+  qp_isScrolling = false;
+  qp_sortType = null;
+  qp_posts = new Map();
+  
+  document.querySelectorAll('.la-sort-btn').forEach(b => b.classList.remove('active', 'loading'));
+  document.getElementById('la-status')?.classList.remove('visible');
+}
+
+async function qp_applySort(): Promise<void> {
+  if (!qp_sortType) return;
+  
+  console.log('[QP] Applying sort:', qp_sortType);
+  qp_updateOverlayText('Sorting posts...');
+  
+  const posts = Array.from(qp_posts.values());
+  console.log('[QP] Got', posts.length, 'posts');
+  
+  if (posts.length === 0) {
+    qp_updateOverlayText('No posts found');
+    setTimeout(() => qp_finish(), 2000);
+    return;
+  }
+  
+  const sorted = sortPosts(posts, qp_sortType);
+  qp_updateOverlayText(`Applying ${sorted.length} posts...`);
+  
+  const urns = sorted.map(p => p.activityUrn);
+  const data: PostData[] = sorted.map(p => ({
+    activityUrn: p.activityUrn,
+    authorName: p.authorName || 'Unknown',
+    text: p.text || '',
+    numLikes: p.numLikes || 0,
+    numComments: p.numComments || 0,
+    numShares: p.numShares || 0,
+  }));
+  
+  await reorderFeedPosts(urns, data);
+  
+  qp_updateOverlayText('Done!');
+  await new Promise(r => setTimeout(r, 500));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  await new Promise(r => setTimeout(r, 800));
+  
+  qp_finish();
+}
+
+function qp_finish(): void {
+  console.log('[QP] Finished with', qp_posts.size, 'posts');
+  qp_hideOverlay();
+  qp_isActive = false;
+  qp_sortType = null;
+  
+  const restoreBtn = document.getElementById('la-restore-btn');
+  if (restoreBtn) restoreBtn.style.display = 'flex';
+  
+  document.querySelectorAll('.la-sort-btn').forEach(b => b.classList.remove('loading'));
+  document.getElementById('la-status')?.classList.remove('visible');
+}
+
+function qp_updateUI(sortType: string, count: number, _state: string): void {
+  document.querySelectorAll('.la-sort-btn').forEach((btn) => {
+    btn.classList.remove('active', 'loading');
+    if (btn.getAttribute('data-sort') === sortType) btn.classList.add('active', 'loading');
+  });
+  
+  document.querySelectorAll('.la-count-btn').forEach((btn) => {
+    btn.classList.remove('active');
+    if (parseInt(btn.getAttribute('data-count') || '0') === count) btn.classList.add('active');
+  });
+  
+  document.getElementById('la-status')?.classList.add('visible');
+  const statusText = document.getElementById('la-status-text');
+  if (statusText) statusText.textContent = `Collecting ${count} posts...`;
+}
+
+function qp_showOverlay(current: number, target: number): void {
+  qp_hideOverlay();
+  
+  const backdrop = document.createElement('div');
+  backdrop.id = 'qp-backdrop';
+  backdrop.innerHTML = `
+    <style>
+      #qp-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 999998;
+      }
+    </style>
+  `;
+  document.body.appendChild(backdrop);
+  
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'qp-overlay';
+  overlay.innerHTML = `
+    <style>
+      #qp-overlay {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 40px 60px;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        z-index: 999999;
+        text-align: center;
+        font-family: -apple-system, system-ui, sans-serif;
+        min-width: 280px;
+      }
+      #qp-overlay .spinner {
+        width: 60px;
+        height: 60px;
+        border: 5px solid #e5e7eb;
+        border-top-color: #0077B5;
+        border-radius: 50%;
+        animation: qp-spin 0.8s linear infinite;
+        margin: 0 auto 24px;
+      }
+      @keyframes qp-spin {
+        to { transform: rotate(360deg); }
+      }
+      #qp-overlay .count {
+        font-size: 36px;
+        font-weight: 700;
+        color: #0077B5;
+        margin-bottom: 8px;
+      }
+      #qp-overlay .text {
+        font-size: 14px;
+        color: #6b7280;
+        margin-bottom: 24px;
+      }
+      #qp-stop-btn {
+        background: #dc2626;
+        color: white;
+        border: none;
+        padding: 12px 32px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      #qp-stop-btn:hover {
+        background: #b91c1c;
+      }
+    </style>
+    <div class="spinner"></div>
+    <div class="count" id="qp-count">${current} / ${target}</div>
+    <div class="text" id="qp-text">Collecting posts...</div>
+    <button id="qp-stop-btn">Stop Collection</button>
+  `;
+  document.body.appendChild(overlay);
+  
+  // Add stop button handler
+  const stopBtn = document.getElementById('qp-stop-btn');
+  if (stopBtn) {
+    stopBtn.addEventListener('click', () => {
+      console.log('[QP] Stop button clicked');
+      qp_stop();
+    });
+  }
+}
+
+function qp_updateOverlay(current: number, target: number): void {
+  const countEl = document.getElementById('qp-count');
+  if (countEl) countEl.textContent = `${current} / ${target}`;
+}
+
+function qp_updateOverlayText(text: string): void {
+  const textEl = document.getElementById('qp-text');
+  if (textEl) textEl.textContent = text;
+}
+
+function qp_hideOverlay(): void {
+  const overlay = document.getElementById('qp-overlay');
+  const backdrop = document.getElementById('qp-backdrop');
+  if (overlay) overlay.remove();
+  if (backdrop) backdrop.remove();
+}
+
+// Get collection state from background
+function getCollectionState(): Promise<{ 
+  currentCount: number; 
+  isCollecting: boolean;
+  targetCount?: number | 'all';
+  collectionMode?: CollectionMode;
+}> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
+      resolve(response || { currentCount: 0, isCollecting: false });
+    });
+  });
+}
+
+// Get collected posts from background
+function getCollectedPosts(): Promise<any[]> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_POSTS" }, (response) => {
+      resolve(response?.posts || []);
+    });
+  });
+}
+
+// Sort posts by criteria
+function sortPosts(posts: any[], sortType: string): any[] {
+  return [...posts].sort((a, b) => {
+    switch (sortType) {
+      case 'likes':
+        return b.numLikes - a.numLikes;
+      case 'comments':
+        return b.numComments - a.numComments;
+      case 'shares':
+        return b.numShares - a.numShares;
+      case 'engagement':
+        const engA = a.numLikes + a.numComments * 2 + a.numShares * 3;
+        const engB = b.numLikes + b.numComments * 2 + b.numShares * 3;
+        return engB - engA;
+      default:
+        return 0;
+    }
+  });
+}
+
+// Initialize inline controls when page is ready
+function initInlineControls(): void {
+  // Only inject on feed pages
+  if (window.location.pathname === '/feed/' || window.location.pathname === '/feed') {
+    // Wait for feed to load
+    const checkFeed = setInterval(() => {
+      const feedToggle = document.querySelector('.feed-sort-toggle-dsa__wrapper');
+      if (feedToggle) {
+        clearInterval(checkFeed);
+        injectSortControls();
+        
+        // Check for pending quick sort after injection
+        checkPendingQuickSort();
+      }
+    }, 1000);
+    
+    // Stop checking after 30 seconds
+    setTimeout(() => clearInterval(checkFeed), 30000);
+  }
+}
+
+// Legacy function - now just calls Quick Panel system
+function checkPendingQuickSort(): void {
+  qp_checkPending();
+}
+
+// Start inline controls
+initInlineControls();
+
+// Re-inject if navigating within LinkedIn SPA
+let lastUrl = location.href;
+new MutationObserver(() => {
+  const currentUrl = location.href;
+  if (currentUrl !== lastUrl) {
+    lastUrl = currentUrl;
+    setTimeout(initInlineControls, 1000);
+  }
+}).observe(document, { subtree: true, childList: true });

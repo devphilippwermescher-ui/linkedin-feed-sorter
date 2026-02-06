@@ -1031,3 +1031,122 @@ body.landing-mode {
   margin-top: 16px;
   line-height: 1.4;
 }
+
+/* Apply to Feed Section */
+.apply-to-feed-section {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #f0f7ff 0%, #e8f4ff 100%);
+  border-bottom: 1px solid #CDDBEB;
+  flex-shrink: 0;
+}
+
+.apply-to-feed-button {
+  width: 100%;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, #034C9D 0%, #0066CC 100%);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-family: "Poppins", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(3, 76, 157, 0.3);
+}
+
+.apply-to-feed-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(3, 76, 157, 0.4);
+}
+
+.apply-to-feed-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.apply-to-feed-button .button-icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+}
+
+.button-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.feed-applied-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.feed-applied-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.feed-applied-badge svg {
+  flex-shrink: 0;
+}
+
+.restore-feed-button {
+  padding: 10px 16px;
+  background: white;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  font-family: "Poppins", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.restore-feed-button:hover {
+  background: #f7f7f7;
+  border-color: #d1d5db;
+  color: #4b5563;
+}
+
+.restore-feed-button .button-icon {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
+.apply-hint {
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 10px;
+  line-height: 1.4;
+}

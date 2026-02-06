@@ -10,7 +10,9 @@ import {
   HiOutlineBolt,
   HiOutlineArrowsRightLeft,
   HiOutlineSparkles,
-  HiOutlineCog6Tooth
+  HiOutlineCog6Tooth,
+  HiOutlineArrowsUpDown,
+  HiOutlineArrowUturnLeft
 } from "react-icons/hi2";
 import "./styles.css";
 
@@ -45,6 +47,8 @@ const App: React.FC = () => {
   const [collectionMode, setCollectionMode] = useState<CollectionMode>('lite');
   const [userPlan, setUserPlan] = useState<UserPlan>('free');
   const [showSettings, setShowSettings] = useState(false);
+  const [isApplyingToFeed, setIsApplyingToFeed] = useState(false);
+  const [feedApplied, setFeedApplied] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -295,6 +299,57 @@ const App: React.FC = () => {
 
   const handleBackToSetup = () => {
     setShowResults(false);
+    setFeedApplied(false);
+  };
+
+  const handleApplyToFeed = () => {
+    setIsApplyingToFeed(true);
+    
+    // Get sorted URNs and full post data
+    const sortedUrns = sortedPosts.map(post => post.activityUrn);
+    const postsData = sortedPosts.map(post => ({
+      activityUrn: post.activityUrn,
+      authorName: post.authorName,
+      text: post.text,
+      numLikes: post.numLikes,
+      numComments: post.numComments,
+      numShares: post.numShares,
+    }));
+    
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(
+          tabs[0].id,
+          { type: "REORDER_FEED", sortedUrns, postsData },
+          (response) => {
+            setIsApplyingToFeed(false);
+            if (response?.success) {
+              setFeedApplied(true);
+              console.log('[LinkedIn Analyzer] Feed reordered:', response.reorderedCount, 'posts');
+            } else {
+              console.log('[LinkedIn Analyzer] Reorder failed:', response?.message);
+              alert('Failed to reorder feed: ' + (response?.message || 'Unknown error'));
+            }
+          }
+        );
+      } else {
+        setIsApplyingToFeed(false);
+      }
+    });
+  };
+
+  const handleRestoreFeed = () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(
+          tabs[0].id,
+          { type: "RESTORE_FEED" },
+          () => {
+            setFeedApplied(false);
+          }
+        );
+      }
+    });
   };
 
   const sortedPosts = React.useMemo(() => {
@@ -411,6 +466,52 @@ const App: React.FC = () => {
             </button>
           ))}
         </div>
+        
+        <div className="apply-to-feed-section">
+          {!feedApplied ? (
+            <button 
+              className="apply-to-feed-button"
+              onClick={handleApplyToFeed}
+              disabled={isApplyingToFeed || sortedPosts.length === 0}
+            >
+              {isApplyingToFeed ? (
+                <>
+                  <span className="button-spinner"></span>
+                  Applying...
+                </>
+              ) : (
+                <>
+                  <HiOutlineArrowsUpDown className="button-icon" />
+                  Apply Sort to Feed
+                </>
+              )}
+            </button>
+          ) : (
+            <div className="feed-applied-controls">
+              <span className="feed-applied-badge">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 12l2 2 4-4"/>
+                  <circle cx="12" cy="12" r="10"/>
+                </svg>
+                Feed Sorted!
+              </span>
+              <button 
+                className="restore-feed-button"
+                onClick={handleRestoreFeed}
+              >
+                <HiOutlineArrowUturnLeft className="button-icon" />
+                Restore Original
+              </button>
+            </div>
+          )}
+          <p className="apply-hint">
+            {feedApplied 
+              ? "The LinkedIn feed has been reordered. Switch to the LinkedIn tab to see it."
+              : "Click to rearrange posts in your LinkedIn feed based on the selected sort order"
+            }
+          </p>
+        </div>
+        
         <PostList posts={sortedPosts} />
       </div>
     );
