@@ -12,8 +12,11 @@ import {
   HiOutlineChartBarSquare,
   HiOutlineMagnifyingGlassCircle,
   HiOutlineBolt,
-  HiOutlineRocketLaunch
+  HiOutlineRocketLaunch,
+  HiOutlineArrowDownTray,
+  HiOutlineDocumentArrowDown
 } from "react-icons/hi2";
+import * as XLSX from "xlsx";
 import "./styles.css";
 
 interface CollectionStatus {
@@ -44,18 +47,43 @@ const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [userPlan, setUserPlan] = useState<UserPlan>('free');
   const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [sortedPosts, setSortedPosts] = useState<any[]>([]);
   const autoSortTriggered = useRef(false);
 
   useEffect(() => {
     checkCurrentTab();
     checkCollectionState();
     loadUserPlan();
+    loadExportData();
   }, []);
 
   const loadUserPlan = () => {
     chrome.storage.local.get(['userPlan'], (result) => {
       setUserPlan(result.userPlan || 'free');
     });
+  };
+
+  const loadExportData = () => {
+    chrome.storage.local.get(['exportData'], (result) => {
+      if (result.exportData?.posts?.length > 0) {
+        setSortedPosts(result.exportData.posts);
+        setSortedCount(result.exportData.count || 0);
+        if (result.exportData.filter) {
+          setSelectedFilter(result.exportData.filter);
+        }
+      }
+    });
+  };
+
+  const saveExportData = (posts: any[], count: number, filter: SortOption) => {
+    chrome.storage.local.set({
+      exportData: { posts, count, filter }
+    });
+  };
+
+  const clearExportData = () => {
+    chrome.storage.local.remove('exportData');
   };
 
   const togglePlan = () => {
@@ -115,12 +143,12 @@ const App: React.FC = () => {
   const checkCollectionProgress = () => {
     chrome.runtime.sendMessage({ type: "GET_COLLECTION_STATE" }, (response) => {
       if (!response) return;
-      
-      setCollectionStatus({
-        isCollecting: response.isCollecting,
-        targetCount: response.targetCount,
-        currentCount: response.currentCount,
-      });
+        
+        setCollectionStatus({
+          isCollecting: response.isCollecting,
+          targetCount: response.targetCount,
+          currentCount: response.currentCount,
+        });
 
       if (!response.isCollecting && phase === 'collecting' && !autoSortTriggered.current) {
         autoSortTriggered.current = true;
@@ -172,6 +200,8 @@ const App: React.FC = () => {
         numShares: p.numShares,
       }));
 
+      setSortedPosts(postsData);
+
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs[0]?.id) {
           chrome.tabs.sendMessage(
@@ -181,6 +211,7 @@ const App: React.FC = () => {
               if (result?.success) {
                 setPhase('done');
                 setSortedCount(result.reorderedCount);
+                saveExportData(postsData, result.reorderedCount, selectedFilter);
               } else {
                 setPhase('error');
                 setErrorMessage(result?.message || 'Failed to reorder feed');
@@ -285,6 +316,8 @@ const App: React.FC = () => {
         chrome.tabs.sendMessage(tabs[0].id, { type: "RESTORE_FEED" }, () => {
           setPhase('setup');
           setSortedCount(0);
+          setSortedPosts([]);
+          clearExportData();
         });
       }
     });
@@ -292,7 +325,6 @@ const App: React.FC = () => {
 
   const handleBackToSetup = () => {
     setPhase('setup');
-    setSortedCount(0);
     setErrorMessage('');
   };
 
@@ -316,6 +348,68 @@ const App: React.FC = () => {
     { value: "shares", label: "Shares" },
     { value: "engagement", label: "Engagement" },
   ];
+
+  // Export helpers
+  const getExportData = () => {
+    return sortedPosts.map((p, i) => ({
+      '#': i + 1,
+      'Author': p.authorName || '',
+      'Post Text': (p.text || '').substring(0, 500),
+      'Likes': p.numLikes || 0,
+      'Comments': p.numComments || 0,
+      'Shares': p.numShares || 0,
+      'Post URL': p.activityUrn ? `https://www.linkedin.com/feed/update/${p.activityUrn}` : '',
+    }));
+  };
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportExcel = () => {
+    const data = getExportData();
+    const ws = XLSX.utils.json_to_sheet(data);
+    const colWidths = [
+      { wch: 4 }, { wch: 25 }, { wch: 60 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 50 }
+    ];
+    ws['!cols'] = colWidths;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'LinkedIn Posts');
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    triggerDownload(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'linkedin-posts.xlsx');
+    setShowExportMenu(false);
+  };
+
+  const handleExportCSV = () => {
+    const data = getExportData();
+    const headers = Object.keys(data[0] || {});
+    const csvRows = [
+      headers.join(','),
+      ...data.map(row =>
+        headers.map(h => {
+          const val = String((row as any)[h] ?? '');
+          return `"${val.replace(/"/g, '""')}"`;
+        }).join(',')
+      )
+    ];
+    const csvString = csvRows.join('\n');
+    triggerDownload(new Blob(['\uFEFF' + csvString], { type: 'text/csv;charset=utf-8;' }), 'linkedin-posts.csv');
+    setShowExportMenu(false);
+  };
+
+  const handleExportJSON = () => {
+    const data = getExportData();
+    const jsonString = JSON.stringify(data, null, 2);
+    triggerDownload(new Blob([jsonString], { type: 'application/json' }), 'linkedin-posts.json');
+    setShowExportMenu(false);
+  };
 
   // Premium Modal
   const PremiumModal = () => (
@@ -373,8 +467,8 @@ const App: React.FC = () => {
         </button>
         <p className="premium-modal-price">Starting at $4.99/month</p>
       </div>
-    </div>
-  );
+      </div>
+    );
 
   if (pageType === null) {
     return <div className="app"><div className="loading">Loading...</div></div>;
@@ -435,13 +529,33 @@ const App: React.FC = () => {
             <div className="done-actions">
               <button className="restore-button" onClick={handleRestoreFeed}>
                 <HiOutlineArrowUturnLeft className="button-icon" />
-                Restore Original Feed
+                Restore
               </button>
               <button className="new-sort-button" onClick={handleBackToSetup}>
                 <HiOutlineArrowsUpDown className="button-icon" />
                 New Sort
               </button>
             </div>
+
+            {sortedPosts.length > 0 && (
+              <div className="export-section">
+                <div className="export-header">
+                  <HiOutlineArrowDownTray className="export-header-icon" />
+                  <span>Export Data</span>
+                </div>
+                <div className="export-buttons">
+                  <button className="export-btn export-btn--excel" onClick={handleExportExcel}>
+                    <span className="export-btn-label">Excel</span>
+                  </button>
+                  <button className="export-btn export-btn--csv" onClick={handleExportCSV}>
+                    <span className="export-btn-label">CSV</span>
+                  </button>
+                  <button className="export-btn export-btn--json" onClick={handleExportJSON}>
+                    <span className="export-btn-label">JSON</span>
+          </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <footer className="app-footer">
@@ -479,6 +593,10 @@ const App: React.FC = () => {
     );
   }
 
+  const handleGoToExport = () => {
+    setPhase('done');
+  };
+
   // Setup + Collecting + Sorting
   return (
     <div className="app setup-view">
@@ -490,6 +608,11 @@ const App: React.FC = () => {
           <h1 className="header-title">LinkedIn Analyzer</h1>
         </div>
         <div className="header-right">
+          {sortedPosts.length > 0 && phase === 'setup' && (
+            <button className="header-export-btn" onClick={handleGoToExport} title="Export sorted data">
+              <HiOutlineDocumentArrowDown className="header-export-icon" />
+            </button>
+          )}
           <span className={`plan-badge ${userPlan}`} onClick={togglePlan} title="Click to toggle plan (dev)">
             {PLAN_INFO[userPlan].label}
           </span>
@@ -504,15 +627,15 @@ const App: React.FC = () => {
               {(pageType === 'profile-feed' ? PROFILE_FEED_PRESETS : MAIN_FEED_PRESETS).map((count) => {
                 const locked = isCountLocked(count);
                 return (
-                  <button
-                    key={count}
+                <button
+                  key={count}
                     className={`preset-button ${postCount === count && !locked ? 'active' : ''} ${locked ? 'locked' : ''}`}
-                    onClick={() => handlePresetClick(count)}
+                  onClick={() => handlePresetClick(count)}
                     disabled={phase !== 'setup'}
-                  >
-                    {count}
+                >
+                  {count}
                     {locked && <span className="lock-icon">🔒</span>}
-                  </button>
+                </button>
                 );
               })}
               {pageType === 'profile-feed' && (
@@ -527,21 +650,21 @@ const App: React.FC = () => {
               )}
             </div>
             {userPlan === 'premium' && (
-              <div className="custom-input-wrapper">
-                <label className="custom-label">Custom:</label>
-                <input
-                  type="number"
-                  className="custom-input"
-                  value={customInput}
-                  onChange={handleCustomInputChange}
-                  onBlur={handleCustomInputBlur}
-                  min={1}
-                  max={MAX_POSTS}
-                  placeholder={postCount === 'all' ? 'All' : ''}
+            <div className="custom-input-wrapper">
+              <label className="custom-label">Custom:</label>
+              <input
+                type="number"
+                className="custom-input"
+                value={customInput}
+                onChange={handleCustomInputChange}
+                onBlur={handleCustomInputBlur}
+                min={1}
+                max={MAX_POSTS}
+                placeholder={postCount === 'all' ? 'All' : ''}
                   disabled={postCount === 'all' || phase !== 'setup'}
-                />
-                <span className="max-hint">Max: {MAX_POSTS}</span>
-              </div>
+              />
+              <span className="max-hint">Max: {MAX_POSTS}</span>
+            </div>
             )}
           </div>
         </section>

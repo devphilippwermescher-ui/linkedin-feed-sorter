@@ -75,11 +75,39 @@ body.landing-mode {
   gap: 8px;
 }
 
+/* Header Export Button */
+.header-export-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid #CDDBEB;
+  background: #f0f7ff;
+  color: #034C9D;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.header-export-btn:hover {
+  background: #034C9D;
+  color: white;
+  border-color: #034C9D;
+}
+
+.header-export-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
 /* Plan Badge */
 .plan-badge {
   display: inline-flex;
   align-items: center;
-  height: 22px;
+  height: 24px;
   padding: 0 8px;
   border-radius: 5px;
   font-family: "Poppins", sans-serif;
@@ -867,6 +895,100 @@ body.landing-mode {
   width: 13px;
   height: 13px;
   stroke-width: 2;
+}
+
+/* Export Section */
+.export-section {
+  width: 100%;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.export-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.export-header-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.export-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.export-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-family: "Poppins", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: white;
+  color: #4b5563;
+}
+
+.export-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.export-btn:active {
+  transform: translateY(0);
+}
+
+.export-btn--excel {
+  border-color: #dcfce7;
+  color: #16a34a;
+  background: #f0fdf4;
+}
+
+.export-btn--excel:hover {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.export-btn--csv {
+  border-color: #dbeafe;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.export-btn--csv:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.export-btn--json {
+  border-color: #fef3c7;
+  color: #d97706;
+  background: #fffbeb;
+}
+
+.export-btn--json:hover {
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.export-btn-label {
+  font-weight: 600;
 }
 
 /* Error Section */
