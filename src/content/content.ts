@@ -1983,7 +1983,6 @@ function qp_showPremiumModal(): void {
   backdrop.innerHTML = `
     <div id="la-premium-modal">
       <button class="la-pm-close" id="la-pm-close">&times;</button>
-      <div class="la-pm-icon">⚡</div>
       <div class="la-pm-title">Upgrade to Premium</div>
       <div class="la-pm-subtitle">Unlock the full power of LinkedIn Analyzer</div>
       <div class="la-pm-features">
